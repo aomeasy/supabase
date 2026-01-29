@@ -114,6 +114,14 @@ async def fetch_data_waterfall(symbol):
     print(f"❌ All sources failed for {symbol}")
     return None
 
+
+def calculate_upside_pct(current_price, ema_200):
+    """คำนวณ upside potential จากราคาปัจจุบันถึง EMA 200"""
+    if not current_price or not ema_200 or ema_200 == 0:
+        return None
+    return round(((ema_200 - current_price) / current_price) * 100, 2)
+
+
 async def main():
     # 1. ดึงรายชื่อหุ้นจาก stock_master
     res = supabase.table("stock_master").select("symbol").eq("is_active", True).execute()
@@ -140,6 +148,9 @@ async def main():
                 "ema_200": data.get("ema_200"),
                 "bb_upper": data.get("bb_upper"),
                 "bb_lower": data.get("bb_lower"),
+                "upside_pct": upside_pct,   
+                "analyst_buy_pct": None,     
+                "sentiment_score": None,    
                 "recorded_at": datetime.now().isoformat()
             }
             
