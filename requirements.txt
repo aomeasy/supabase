@@ -3,5 +3,4 @@ yfinance
 pandas
 ta-lib
 requests
-python-dotenv
-pandas_ta
+python-dotenv 
