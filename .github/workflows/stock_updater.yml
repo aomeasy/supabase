@@ -1,0 +1,34 @@
+name: StockAI Data Collector
+
+on:
+  schedule:
+    # รันทุกวันจันทร์-ศุกร์ เวลา 08:30 น. ตามเวลาไทย (01:30 UTC)
+    # เพื่อเตรียมข้อมูลให้พร้อมก่อนตลาดหุ้นเอเชียเปิดและก่อนคุณเริ่มงาน
+    - cron: '30 1 * * 1-5'
+  workflow_dispatch: # ช่วยให้คุณสามารถกดปุ่มรันด้วยตัวเองได้ตลอดเวลา
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Scraper Script
+        env:
+          # ดึงค่าจาก GitHub Secrets เพื่อความปลอดภัยสูงสุด
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TWELVE_DATA_KEY: ${{ secrets.TWELVE_DATA_KEY }}
+        run: python supabase.py # เปลี่ยนชื่อไฟล์ให้ตรงกับไฟล์ Python ของคุณ
