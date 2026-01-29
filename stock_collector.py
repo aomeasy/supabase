@@ -121,6 +121,78 @@ def calculate_upside_pct(current_price, ema_200):
         return None
     return round(((ema_200 - current_price) / current_price) * 100, 2)
 
+def fetch_analyst_data(symbol):
+    """ดึงข้อมูล Analyst Recommendations จาก yfinance"""
+    try:
+        stock = yf.Ticker(symbol)
+        recommendations = stock.recommendations
+        
+        if recommendations is not None and not recommendations.empty:
+            # ดึง 10 รายการล่าสุด
+            recent = recommendations.tail(10)
+            
+            # นับจำนวน Buy/Strong Buy
+            buy_grades = ['buy', 'strong buy', 'outperform', 'overweight']
+            buy_count = 0
+            
+            for _, row in recent.iterrows():
+                grade = str(row.get('To Grade', '')).lower()
+                if any(buy_word in grade for buy_word in buy_grades):
+                    buy_count += 1
+            
+            total = len(recent)
+            return round((buy_count / total) * 100, 2) if total > 0 else None
+            
+    except Exception as e:
+        print(f"⚠️ Cannot fetch analyst data for {symbol}: {e}")
+    
+    return None
+
+
+def fetch_sentiment_score(symbol):
+    """คำนวณ Sentiment Score จากข่าวของ yfinance"""
+    try:
+        stock = yf.Ticker(symbol)
+        news = stock.news
+        
+        if not news or len(news) == 0:
+            return None
+        
+        # คำนวณ sentiment จาก title ของข่าว
+        positive_keywords = [
+            'surge', 'soar', 'jump', 'gain', 'rise', 'rally', 'bull', 
+            'upgrade', 'beat', 'strong', 'growth', 'record', 'high'
+        ]
+        negative_keywords = [
+            'fall', 'drop', 'plunge', 'crash', 'bear', 'downgrade', 
+            'miss', 'weak', 'loss', 'decline', 'low', 'concern'
+        ]
+        
+        score = 0
+        analyzed_count = 0
+        
+        # วิเคราะห์ข่าว 20 รายการล่าสุด
+        for article in news[:20]:
+            title = article.get('title', '').lower()
+            
+            pos_count = sum(1 for word in positive_keywords if word in title)
+            neg_count = sum(1 for word in negative_keywords if word in title)
+            
+            if pos_count > 0 or neg_count > 0:
+                score += pos_count - neg_count
+                analyzed_count += 1
+        
+        if analyzed_count == 0:
+            return None
+        
+        # แปลงเป็น -1 ถึง 1
+        normalized_score = score / analyzed_count
+        return round(max(-1, min(1, normalized_score)), 2)
+        
+    except Exception as e:
+        print(f"⚠️ Cannot fetch sentiment for {symbol}: {e}")
+    
+    return None
 
 async def main():
     # 1. ดึงรายชื่อหุ้นจาก stock_master
@@ -131,16 +203,29 @@ async def main():
         print("📭 No active symbols found in stock_master.")
         return
 
+
+    
+
     for symbol in symbols:
         data = await fetch_data_waterfall(symbol)
+ 
 
         if data:
-            # คำนวณค่าเพิ่มเติม
-                upside_pct = calculate_upside_pct(
-                data.get("price"), 
-                data.get("ema_200")
-            )
+            # Debug
+            if not data.get("ema_200"):
+                print(f"⚠️ {symbol}: No EMA 200 data")
             
+            # คำนวณค่าเพิ่มเติม
+            print(f"📊 Calculating additional metrics for {symbol}...")
+            
+            upside_pct = calculate_upside_pct(
+                data.get("price"), 
+                data.get("ema_200"),
+                data.get("ema_50")
+            )
+            analyst_pct = fetch_analyst_data(symbol)
+            sentiment = fetch_sentiment_score(symbol)
+        
         if data:
             # 2. บันทึกข้อมูลลง stock_snapshots
             payload = {
@@ -156,8 +241,8 @@ async def main():
                 "bb_upper": data.get("bb_upper"),
                 "bb_lower": data.get("bb_lower"),
                 "upside_pct": upside_pct,      # ⬅️ ใช้ตัวแปรที่คำนวณแล้ว
-                "analyst_buy_pct": None,       # ⬅️ ถ้ามีฟิลด์นี้
-                "sentiment_score": None,       # ⬅️ ถ้ามีฟิลด์นี้
+                "analyst_buy_pct": analyst_pct,      # ⬅️ ใช้ค่าที่ดึงมา
+                "sentiment_score": sentiment,        # ⬅️ ใช้ค่าที่ดึงมา
                 "recorded_at": datetime.now().isoformat()
             }
             
