@@ -133,7 +133,14 @@ async def main():
 
     for symbol in symbols:
         data = await fetch_data_waterfall(symbol)
-        
+
+        if data:
+            # คำนวณค่าเพิ่มเติม
+                upside_pct = calculate_upside_pct(
+                data.get("price"), 
+                data.get("ema_200")
+            )
+            
         if data:
             # 2. บันทึกข้อมูลลง stock_snapshots
             payload = {
@@ -148,9 +155,9 @@ async def main():
                 "ema_200": data.get("ema_200"),
                 "bb_upper": data.get("bb_upper"),
                 "bb_lower": data.get("bb_lower"),
-                "upside_pct": upside_pct,   
-                "analyst_buy_pct": None,     
-                "sentiment_score": None,    
+                "upside_pct": upside_pct,      # ⬅️ ใช้ตัวแปรที่คำนวณแล้ว
+                "analyst_buy_pct": None,       # ⬅️ ถ้ามีฟิลด์นี้
+                "sentiment_score": None,       # ⬅️ ถ้ามีฟิลด์นี้
                 "recorded_at": datetime.now().isoformat()
             }
             
