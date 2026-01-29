@@ -1,4 +1,6 @@
 supabase
+yfinance
+pandas
+pandas_ta
 requests
 python-dotenv
-asyncio
