@@ -2,7 +2,7 @@ import os
 import asyncio
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
+import talib
 from supabase import create_client, Client
 import requests
 from datetime import datetime
@@ -17,32 +17,36 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 # ⬆️ 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+import talib  # ⬅️ เปลี่ยน import
+
 def calculate_technical_indicators(df):
-    """คำนวณค่าเทคนิคด้วยตัวเองผ่าน pandas_ta เพื่อเลี่ยงค่า Null จาก API"""
+    """คำนวณค่าเทคนิคด้วย TA-Lib"""
     try:
-        # ตรวจสอบว่ามีข้อมูลเพียงพอ (อย่างน้อย 200 แท่งสำหรับ EMA 200)
-        if len(df) < 20: return None
+        if len(df) < 200:  # ต้องมีข้อมูลอย่างน้อย 200 แท่ง
+            return None
         
-        # คำนวณ RSI, MACD, EMA
-        df.ta.rsi(length=14, append=True)
-        df.ta.macd(fast=12, slow=26, signal=9, append=True)
-        df.ta.ema(length=20, append=True)
-        df.ta.ema(length=50, append=True)
-        df.ta.ema(length=200, append=True)
-        df.ta.bbands(length=20, std=2, append=True)
+        close = df['Close'].values
+        high = df['High'].values
+        low = df['Low'].values
         
-        last = df.iloc[-1]
+        # คำนวณด้วย talib
+        rsi = talib.RSI(close, timeperiod=14)
+        macd, macd_signal, _ = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
+        ema_20 = talib.EMA(close, timeperiod=20)
+        ema_50 = talib.EMA(close, timeperiod=50)
+        ema_200 = talib.EMA(close, timeperiod=200)
+        bb_upper, bb_middle, bb_lower = talib.BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2)
         
         return {
-            "price": float(last['Close']),
-            "rsi": float(last['RSI_14']) if not pd.isna(last['RSI_14']) else None,
-            "macd": float(last['MACD_12_26_9']) if not pd.isna(last['MACD_12_26_9']) else None,
-            "macd_signal": float(last['MACDs_12_26_9']) if not pd.isna(last['MACDs_12_26_9']) else None,
-            "ema_20": float(last['EMA_20']) if not pd.isna(last['EMA_20']) else None,
-            "ema_50": float(last['EMA_50']) if not pd.isna(last['EMA_50']) else None,
-            "ema_200": float(last['EMA_200']) if not pd.isna(last['EMA_200']) else None,
-            "bb_upper": float(last['BBU_20_2.0']) if not pd.isna(last['BBU_20_2.0']) else None,
-            "bb_lower": float(last['BBL_20_2.0']) if not pd.isna(last['BBL_20_2.0']) else None
+            "price": float(close[-1]),
+            "rsi": float(rsi[-1]) if not pd.isna(rsi[-1]) else None,
+            "macd": float(macd[-1]) if not pd.isna(macd[-1]) else None,
+            "macd_signal": float(macd_signal[-1]) if not pd.isna(macd_signal[-1]) else None,
+            "ema_20": float(ema_20[-1]) if not pd.isna(ema_20[-1]) else None,
+            "ema_50": float(ema_50[-1]) if not pd.isna(ema_50[-1]) else None,
+            "ema_200": float(ema_200[-1]) if not pd.isna(ema_200[-1]) else None,
+            "bb_upper": float(bb_upper[-1]) if not pd.isna(bb_upper[-1]) else None,
+            "bb_lower": float(bb_lower[-1]) if not pd.isna(bb_lower[-1]) else None
         }
     except Exception as e:
         print(f"❌ Error calculating indicators: {e}")
