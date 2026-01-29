@@ -31,4 +31,4 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           TWELVE_DATA_KEY: ${{ secrets.TWELVE_DATA_KEY }}
-        run: python supabase.py # เปลี่ยนชื่อไฟล์ให้ตรงกับไฟล์ Python ของคุณ
+        run: python stock_collector.py # เปลี่ยนชื่อไฟล์ให้ตรงกับไฟล์ Python ของคุณ
