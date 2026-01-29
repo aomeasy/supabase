@@ -11,7 +11,10 @@ from datetime import datetime
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_KEY")
-
+# ⬇️ เพิ่มตรงนี้
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY in environment variables")
+# ⬆️ 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def calculate_technical_indicators(df):
@@ -55,15 +58,22 @@ async def fetch_data_waterfall(symbol):
         stock = yf.Ticker(symbol)
         df = stock.history(period="2y")
         
-        if not df.empty:
+        if not df.empty and len(df) >= 2:  # ✅ เช็คว่ามีข้อมูลอย่างน้อย 2 แถว
             tech_data = calculate_technical_indicators(df)
             if tech_data:
                 # คำนวณ change_pct จากราคาปิดเมื่อวาน
                 prev_close = df['Close'].iloc[-2]
-                change_pct = ((tech_data['price'] - prev_close) / prev_close) * 100
-                tech_data['change_pct'] = change_pct
+                current_price = tech_data['price']
+                change_pct = ((current_price - prev_close) / prev_close) * 100
+                
+                tech_data['change_pct'] = round(change_pct, 2)  # ✅ ปัดเศษ 2 ตำแหน่ง
                 tech_data['source'] = 'yfinance'
                 return tech_data
+            else:
+                print(f"⚠️ Could not calculate indicators for {symbol}")
+        else:
+            print(f"⚠️ Insufficient data from yfinance for {symbol}")
+            
     except Exception as e:
         print(f"⚠️ yfinance failed for {symbol}: {e}")
 
@@ -72,17 +82,32 @@ async def fetch_data_waterfall(symbol):
         try:
             print(f"🔄 Falling back to Twelve Data for {symbol}...")
             url = f"https://api.twelvedata.com/quote?symbol={symbol}&apikey={TWELVE_DATA_KEY}"
-            resp = requests.get(url).json()
-            if "close" in resp:
+            resp = requests.get(url, timeout=10)  # ✅ เพิ่ม timeout
+            resp.raise_for_status()  # ✅ เช็ค HTTP errors
+            
+            data = resp.json()
+            
+            if "close" in data and "percent_change" in data:
                 return {
-                    "price": float(resp['close']),
-                    "change_pct": float(resp['percent_change']),
+                    "price": float(data['close']),
+                    "change_pct": float(data['percent_change']),
                     "source": "twelvedata",
-                    "rsi": None # ถ้า fallback ตัวนี้อาจจะได้ค่าไม่ครบ แต่ยังได้ราคา
+                    "rsi": None,
+                    "macd": None,
+                    "macd_signal": None,
+                    "ema_20": None,
+                    "ema_50": None,
+                    "ema_200": None,
+                    "bb_upper": None,
+                    "bb_lower": None
                 }
+            else:
+                print(f"⚠️ Invalid response from Twelve Data: {data}")
+                
         except Exception as e:
-            print(f"❌ Twelve Data fallback failed: {e}")
+            print(f"❌ Twelve Data fallback failed for {symbol}: {e}")
 
+    print(f"❌ All sources failed for {symbol}")
     return None
 
 async def main():
@@ -120,7 +145,7 @@ async def main():
             print(f"❌ Failed: Could not get data for {symbol}")
             
         # หน่วงเวลาสั้นๆ เพื่อถนอม API
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
 if __name__ == "__main__":
     asyncio.run(main())
