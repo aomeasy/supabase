@@ -1,72 +1,126 @@
-import asyncio
 import os
+import asyncio
+import yfinance as yf
+import pandas as pd
+import pandas_ta as ta
 from supabase import create_client, Client
 import requests
-import time
+from datetime import datetime
 
-# --- การตั้งค่า (แนะนำให้ใช้ Environment Variables) ---
-SUPABASE_URL = "YOUR_SUPABASE_URL"
-SUPABASE_KEY = "YOUR_SUPABASE_KEY"
-TWELVE_DATA_KEY = "YOUR_TWELVE_DATA_KEY"
+# --- Configuration ---
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-async def fetch_stock_indicators(symbol):
-    """ดึงข้อมูลเทคนิคจาก Twelve Data (จัดการ Rate Limit ในตัว)"""
+def calculate_technical_indicators(df):
+    """คำนวณค่าเทคนิคด้วยตัวเองผ่าน pandas_ta เพื่อเลี่ยงค่า Null จาก API"""
     try:
-        # ในฐานะผู้เชี่ยวชาญ SQL การจัดเก็บข้อมูลที่ครบถ้วนจะช่วยให้การ Query ภายหลังทำได้แม่นยำขึ้น
-        base_url = "https://api.twelvedata.com"
-        # ดึงหลาย Indicators ในครั้งเดียว (ช่วยประหยัดโควตา API)
-        params = {
-            "symbol": symbol,
-            "interval": "1day",
-            "apikey": TWELVE_DATA_KEY,
-            "outputsize": 1
+        # ตรวจสอบว่ามีข้อมูลเพียงพอ (อย่างน้อย 200 แท่งสำหรับ EMA 200)
+        if len(df) < 20: return None
+        
+        # คำนวณ RSI, MACD, EMA
+        df.ta.rsi(length=14, append=True)
+        df.ta.macd(fast=12, slow=26, signal=9, append=True)
+        df.ta.ema(length=20, append=True)
+        df.ta.ema(length=50, append=True)
+        df.ta.ema(length=200, append=True)
+        df.ta.bbands(length=20, std=2, append=True)
+        
+        last = df.iloc[-1]
+        
+        return {
+            "price": float(last['Close']),
+            "rsi": float(last['RSI_14']) if not pd.isna(last['RSI_14']) else None,
+            "macd": float(last['MACD_12_26_9']) if not pd.isna(last['MACD_12_26_9']) else None,
+            "macd_signal": float(last['MACDs_12_26_9']) if not pd.isna(last['MACDs_12_26_9']) else None,
+            "ema_20": float(last['EMA_20']) if not pd.isna(last['EMA_20']) else None,
+            "ema_50": float(last['EMA_50']) if not pd.isna(last['EMA_50']) else None,
+            "ema_200": float(last['EMA_200']) if not pd.isna(last['EMA_200']) else None,
+            "bb_upper": float(last['BBU_20_2.0']) if not pd.isna(last['BBU_20_2.0']) else None,
+            "bb_lower": float(last['BBL_20_2.0']) if not pd.isna(last['BBL_20_2.0']) else None
         }
-        
-        # ตัวอย่างการดึง RSI (ปรับเพิ่มตัวอื่นๆ ได้ตามโครงสร้าง API)
-        # หมายเหตุ: ในโปรเจกต์จริง ควรแยกฟังก์ชันดึงแต่ละตัวและใช้ asyncio.sleep เพื่อเลี่ยง 429 Error
-        price_resp = requests.get(f"{base_url}/quote", params=params).json()
-        rsi_resp = requests.get(f"{base_url}/rsi", params=params).json()
-        
-        if "values" in rsi_resp:
-            return {
-                "symbol": symbol,
-                "price": float(price_resp.get("close", 0)),
-                "change_pct": float(price_resp.get("percent_change", 0)),
-                "rsi": float(rsi_resp["values"][0]["rsi"])
-                # เพิ่ม MACD, EMA, BB ต่อได้ที่นี่
-            }
     except Exception as e:
-        print(f"❌ Error fetching {symbol}: {e}")
+        print(f"❌ Error calculating indicators: {e}")
+        return None
+
+async def fetch_data_waterfall(symbol):
+    """กลยุทธ์ดึงข้อมูลแบบน้ำตก: yfinance -> Twelve Data"""
+    print(f"🔍 Fetching data for {symbol}...")
+    
+    # --- Source 1: yfinance (Primary) ---
+    try:
+        # ดึงข้อมูลย้อนหลัง 2 ปีเพื่อให้คำนวณ EMA 200 ได้
+        stock = yf.Ticker(symbol)
+        df = stock.history(period="2y")
+        
+        if not df.empty:
+            tech_data = calculate_technical_indicators(df)
+            if tech_data:
+                # คำนวณ change_pct จากราคาปิดเมื่อวาน
+                prev_close = df['Close'].iloc[-2]
+                change_pct = ((tech_data['price'] - prev_close) / prev_close) * 100
+                tech_data['change_pct'] = change_pct
+                tech_data['source'] = 'yfinance'
+                return tech_data
+    except Exception as e:
+        print(f"⚠️ yfinance failed for {symbol}: {e}")
+
+    # --- Source 2: Twelve Data (Fallback) ---
+    if TWELVE_DATA_KEY:
+        try:
+            print(f"🔄 Falling back to Twelve Data for {symbol}...")
+            url = f"https://api.twelvedata.com/quote?symbol={symbol}&apikey={TWELVE_DATA_KEY}"
+            resp = requests.get(url).json()
+            if "close" in resp:
+                return {
+                    "price": float(resp['close']),
+                    "change_pct": float(resp['percent_change']),
+                    "source": "twelvedata",
+                    "rsi": None # ถ้า fallback ตัวนี้อาจจะได้ค่าไม่ครบ แต่ยังได้ราคา
+                }
+        except Exception as e:
+            print(f"❌ Twelve Data fallback failed: {e}")
+
     return None
 
 async def main():
-    print("🚀 เริ่มกระบวนการ Update Stock Data...")
+    # 1. ดึงรายชื่อหุ้นจาก stock_master
+    res = supabase.table("stock_master").select("symbol").eq("is_active", True).execute()
+    symbols = [item['symbol'] for item in res.data]
     
-    # 1. ดึงรายชื่อหุ้นจาก Database (Stock Master)
-    # วิธีนี้ทำให้รองรับการเพิ่มหุ้นใหม่ในอนาคตได้เพียงแค่เพิ่ม Row ใน Supabase
-    response = supabase.table("stock_master").select("symbol").eq("is_active", True).execute()
-    symbols = [item['symbol'] for item in response.data]
-    
+    if not symbols:
+        print("📭 No active symbols found in stock_master.")
+        return
+
     for symbol in symbols:
-        print(f"🔍 Processing {symbol}...")
-        
-        data = await fetch_stock_indicators(symbol)
+        data = await fetch_data_waterfall(symbol)
         
         if data:
-            # 2. บันทึกลง stock_snapshots
-            supabase.table("stock_snapshots").insert({
-                "symbol": data["symbol"],
-                "price": data["price"],
-                "change_pct": data["change_pct"],
-                "rsi": data["rsi"]
-                # ใส่ข้อมูลตัวอื่นๆ ตามที่ออกแบบไว้
-            }).execute()
-            print(f"✅ Saved {symbol} to Supabase")
-        
-        # 3. สำคัญมาก: หน่วงเวลาเพื่อเลี่ยง Rate Limit ของ API แผนฟรี
-        await asyncio.sleep(8) 
+            # 2. บันทึกข้อมูลลง stock_snapshots
+            payload = {
+                "symbol": symbol,
+                "price": data.get("price"),
+                "change_pct": data.get("change_pct"),
+                "rsi": data.get("rsi"),
+                "macd": data.get("macd"),
+                "macd_signal": data.get("macd_signal"),
+                "ema_20": data.get("ema_20"),
+                "ema_50": data.get("ema_50"),
+                "ema_200": data.get("ema_200"),
+                "bb_upper": data.get("bb_upper"),
+                "bb_lower": data.get("bb_lower"),
+                "recorded_at": datetime.now().isoformat()
+            }
+            
+            supabase.table("stock_snapshots").insert(payload).execute()
+            print(f"✅ Success: {symbol} via {data['source']}")
+        else:
+            print(f"❌ Failed: Could not get data for {symbol}")
+            
+        # หน่วงเวลาสั้นๆ เพื่อถนอม API
+        await asyncio.sleep(2)
 
 if __name__ == "__main__":
     asyncio.run(main())
