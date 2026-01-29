@@ -1,0 +1,4 @@
+supabase
+requests
+python-dotenv
+asyncio
