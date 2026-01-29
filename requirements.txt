@@ -1,6 +1,6 @@
 supabase
 yfinance
 pandas
-pandas_ta
+pandas-ta
 requests
 python-dotenv
