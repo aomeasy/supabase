@@ -43,5 +43,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           TWELVE_DATA_KEY: ${{ secrets.TWELVE_DATA_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}  # ⬅️ เพิ่ม
+          GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
         run: python stock_collector.py # เปลี่ยนชื่อไฟล์ให้ตรงกับไฟล์ Python ของคุณ
