@@ -84,21 +84,32 @@ def rotate_to_next_key():
     current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
     print(f"🔄 Rotating from Key #{old_index + 1} to Key #{current_key_index + 1}")
 
-
 def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
-    """ใช้ Gemini วิเคราะห์หุ้น พร้อม key rotation"""
+    """ใช้ Gemini วิเคราะห์หุ้น พร้อม key rotation และ model fallback"""
     
-    for attempt in range(max_retries):
-        try:
-            # หา key ที่พร้อมใช้งาน
-            key_index, api_key = get_next_available_key()
-            
-            # ✅ ตั้งค่า Gemini แบบ google.generativeai
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            
-            # สร้าง prompt
-            prompt = f"""
+    # ⬇️ ลำดับ model ที่จะลอง (จากใหม่ไปเก่า)
+    models_to_try = [
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'gemini-pro',
+        'models/gemini-1.5-flash',
+        'models/gemini-pro'
+    ]
+    
+    for model_name in models_to_try:
+        for attempt in range(max_retries):
+            try:
+                # หา key ที่พร้อมใช้งาน
+                key_index, api_key = get_next_available_key()
+                
+                # ตั้งค่า Gemini
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel(model_name)
+                
+                print(f"🤖 Trying model: {model_name}")
+                
+                # สร้าง prompt
+                prompt = f"""
 You are a professional stock analyst. Analyze the following stock data and provide:
 1. overall_score (0-100): Overall investment attractiveness
 2. recommendation: One of ["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"]
@@ -123,59 +134,70 @@ Respond ONLY in JSON format:
   "reasoning": "<brief explanation>"
 }}
 """
+                
+                # เรียก API
+                response = model.generate_content(prompt)
+                result_text = response.text.strip()
+                
+                # ลบ markdown code blocks
+                if result_text.startswith("```json"):
+                    result_text = result_text.replace("```json", "").replace("```", "").strip()
+                elif result_text.startswith("```"):
+                    result_text = result_text.replace("```", "").strip()
+                
+                # Parse JSON
+                result = json.loads(result_text)
+                
+                # ✅ สำเร็จ - นับการใช้งาน
+                key_usage_count[key_index] += 1
+                print(f"✅ Successfully used model: {model_name}")
+                
+                return {
+                    "overall_score": int(result.get("overall_score", 50)),
+                    "recommendation": result.get("recommendation", "Hold"),
+                    "reasoning": result.get("reasoning", "")
+                }
             
-            # ✅ เรียก API แบบ google.generativeai
-            response = model.generate_content(prompt)
-            result_text = response.text.strip()
-            
-            # ลบ markdown code blocks
-            if result_text.startswith("```json"):
-                result_text = result_text.replace("```json", "").replace("```", "").strip()
-            elif result_text.startswith("```"):
-                result_text = result_text.replace("```", "").strip()
-            
-            # Parse JSON
-            result = json.loads(result_text)
-            
-            # ✅ สำเร็จ - นับการใช้งาน
-            key_usage_count[key_index] += 1
-            
-            return {
-                "overall_score": int(result.get("overall_score", 50)),
-                "recommendation": result.get("recommendation", "Hold"),
-                "reasoning": result.get("reasoning", "")
-            }
-        
-        except json.JSONDecodeError as e:
-            print(f"⚠️ JSON parse error for {symbol} (attempt {attempt + 1}/{max_retries}): {e}")
-            print(f"Response: {result_text[:200] if 'result_text' in locals() else 'N/A'}")
-            
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            
-        except Exception as e:
-            error_msg = str(e).lower()
-            
-            # ตรวจสอบว่าเป็น rate limit error หรือไม่
-            if "rate limit" in error_msg or "quota" in error_msg or "429" in error_msg or "resource_exhausted" in error_msg:
-                print(f"⚠️ Rate limit hit for {symbol} with Key #{key_index + 1}")
-                mark_key_as_rate_limited(key_index, cooldown_seconds=60)
-                rotate_to_next_key()
+            except json.JSONDecodeError as e:
+                print(f"⚠️ JSON parse error for {symbol} with {model_name} (attempt {attempt + 1}/{max_retries}): {e}")
+                print(f"Response: {result_text[:200] if 'result_text' in locals() else 'N/A'}")
                 
                 if attempt < max_retries - 1:
                     time.sleep(2)
                     continue
-            else:
-                print(f"⚠️ Gemini API error for {symbol}: {e}")
-            
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
+                # ถ้า retry หมดแล้ว ให้ลอง model ถัดไป
+                break
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                
+                # ถ้าเป็น 404 = model ไม่รองรับ → ลอง model ถัดไป
+                if "404" in error_msg or "not found" in error_msg:
+                    print(f"⚠️ Model {model_name} not available, trying next model...")
+                    break  # ออกจาก retry loop ไปลอง model ถัดไป
+                
+                # ถ้าเป็น rate limit
+                if "rate limit" in error_msg or "quota" in error_msg or "429" in error_msg or "resource_exhausted" in error_msg:
+                    print(f"⚠️ Rate limit hit for {symbol} with Key #{key_index + 1}")
+                    mark_key_as_rate_limited(key_index, cooldown_seconds=60)
+                    rotate_to_next_key()
+                    
+                    if attempt < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                else:
+                    print(f"⚠️ Gemini API error for {symbol} with {model_name}: {e}")
+                
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                # ถ้า retry หมดแล้ว ให้ลอง model ถัดไป
+                break
     
-    print(f"❌ Failed to analyze {symbol} after {max_retries} attempts")
+    # ลองทุก model แล้วไม่สำเร็จ
+    print(f"❌ Failed to analyze {symbol} after trying all models")
     return None
-     
+ 
 def calculate_technical_indicators(df):
     """คำนวณค่าเทคนิคด้วย TA-Lib"""
     try:
