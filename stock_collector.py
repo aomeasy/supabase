@@ -103,19 +103,18 @@ def rotate_to_next_key():
     current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
     print(f"🔄 Rotating from Key #{old_index + 1} to Key #{current_key_index + 1}")
 
+
+
 def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
     """ใช้ Gemini วิเคราะห์หุ้น พร้อม key rotation และ model fallback"""
     
-    # ⬇️ ลำดับ model ที่จะลอง (จากใหม่ไปเก่า)
+    # ⬇️ ใช้ model ที่มีจริงจากรายการที่ได้
     models_to_try = [
-        'gemini-1.5-flash',
-        'gemini-1.5-pro',
-        'gemini-pro',
-        'models/gemini-1.5-flash',
-        'models/gemini-pro'
-        'gemini-2.0-flash-exp',      # ใหม่ล่าสุด
-        'gemini-1.5-flash-latest',   # Stable version
-        'gemini-1.5-pro-latest' 
+        'gemini-2.5-flash',           # ใหม่ล่าสุด
+        'gemini-2.0-flash',            # รุ่นก่อนหน้า
+        'gemini-flash-latest',         # Latest stable
+        'gemini-pro-latest',           # Pro version
+        'gemini-2.5-pro',              # Pro 2.5
     ]
     
     for model_name in models_to_try:
@@ -218,7 +217,7 @@ Respond ONLY in JSON format:
     
     # ลองทุก model แล้วไม่สำเร็จ
     print(f"❌ Failed to analyze {symbol} after trying all models")
-    return None
+    return None 
  
 def calculate_technical_indicators(df):
     """คำนวณค่าเทคนิคด้วย TA-Lib"""
