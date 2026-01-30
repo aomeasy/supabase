@@ -40,8 +40,7 @@ key_cooldown_until = {i: 0 for i in range(len(GEMINI_API_KEYS))}
  
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ตั้งค่า Gemini
-genai.configure(api_key=GEMINI_API_KEY)
+# ตั้งค่า Gemini 
 model = genai.GenerativeModel('models/gemini-2.5-flash')
 
 def get_next_available_key():
@@ -96,9 +95,9 @@ def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
             # หา key ที่พร้อมใช้งาน
             key_index, api_key = get_next_available_key()
             
-            # ตั้งค่า Gemini ด้วย key ปัจจุบัน
+            # ✅ ตั้งค่า Gemini ด้วย key ปัจจุบัน (ตรงนี้ถูกต้องแล้ว)
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-pro')
+            model = genai.GenerativeModel('gemini-1.5-flash')  # ⬅️ เปลี่ยนเป็น gemini-1.5-flash
             
             # สร้าง prompt
             prompt = f"""
@@ -151,9 +150,8 @@ Respond ONLY in JSON format:
         
         except json.JSONDecodeError as e:
             print(f"⚠️ JSON parse error for {symbol} (attempt {attempt + 1}/{max_retries}): {e}")
-            print(f"Response: {result_text[:200]}")
+            print(f"Response: {result_text[:200] if 'result_text' in locals() else 'N/A'}")
             
-            # ลองใหม่ด้วย key เดิม
             if attempt < max_retries - 1:
                 time.sleep(2)
                 continue
@@ -162,24 +160,21 @@ Respond ONLY in JSON format:
             error_msg = str(e).lower()
             
             # ตรวจสอบว่าเป็น rate limit error หรือไม่
-            if "rate limit" in error_msg or "quota" in error_msg or "429" in error_msg:
+            if "rate limit" in error_msg or "quota" in error_msg or "429" in error_msg or "resource_exhausted" in error_msg:
                 print(f"⚠️ Rate limit hit for {symbol} with Key #{key_index + 1}")
                 mark_key_as_rate_limited(key_index, cooldown_seconds=60)
                 rotate_to_next_key()
                 
-                # ลองใหม่ด้วย key ถัดไป
                 if attempt < max_retries - 1:
                     time.sleep(2)
                     continue
             else:
                 print(f"⚠️ Gemini API error for {symbol}: {e}")
             
-            # ถ้าเป็น error อื่นและยังลองได้อีก
             if attempt < max_retries - 1:
                 time.sleep(2)
                 continue
     
-    # ลองครบทุก retry แล้วยังไม่สำเร็จ
     print(f"❌ Failed to analyze {symbol} after {max_retries} attempts")
     return None
      
