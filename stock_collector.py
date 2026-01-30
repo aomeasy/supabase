@@ -10,6 +10,7 @@ import google.generativeai as genai
 import json
 import time
 
+
 # --- Configuration ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -83,6 +84,7 @@ def rotate_to_next_key():
     current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
     print(f"🔄 Rotating from Key #{old_index + 1} to Key #{current_key_index + 1}")
 
+
 def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
     """ใช้ Gemini วิเคราะห์หุ้น พร้อม key rotation"""
     
@@ -91,8 +93,9 @@ def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
             # หา key ที่พร้อมใช้งาน
             key_index, api_key = get_next_available_key()
             
-            # ⬇️ เปลี่ยนวิธีเรียกใช้ API
-            client = genai.Client(api_key=api_key)
+            # ✅ ตั้งค่า Gemini แบบ google.generativeai
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-1.5-flash')
             
             # สร้าง prompt
             prompt = f"""
@@ -121,12 +124,8 @@ Respond ONLY in JSON format:
 }}
 """
             
-            # ⬇️ เรียก API แบบใหม่
-            response = client.models.generate_content(
-                model='models/gemini-2.5-flash',  # ⬅️ ใช้ชื่อนี้
-                contents=prompt
-            )
-            
+            # ✅ เรียก API แบบ google.generativeai
+            response = model.generate_content(prompt)
             result_text = response.text.strip()
             
             # ลบ markdown code blocks
@@ -175,8 +174,8 @@ Respond ONLY in JSON format:
                 continue
     
     print(f"❌ Failed to analyze {symbol} after {max_retries} attempts")
-    return None 
-        
+    return None
+     
 def calculate_technical_indicators(df):
     """คำนวณค่าเทคนิคด้วย TA-Lib"""
     try:
