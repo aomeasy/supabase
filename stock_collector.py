@@ -338,6 +338,7 @@ def fetch_sentiment_score(symbol):
     return None
 
 
+
 async def fetch_data_waterfall(symbol):
     """กลยุทธ์ดึงข้อมูลแบบน้ำตก: yfinance -> Twelve Data"""
     print(f"🔍 Fetching data for {symbol}...")
@@ -349,16 +350,35 @@ async def fetch_data_waterfall(symbol):
         
         if not df.empty and len(df) >= 2:
             tech_data = calculate_technical_indicators(df)
-            if tech_data:
+            
+            # ⬇️ เพิ่มส่วนนี้: ถ้าคำนวณไม่ได้ (ETF หรือข้อมูลน้อย)
+            if not tech_data:
                 prev_close = df['Close'].iloc[-2]
-                current_price = tech_data['price']
+                current_price = float(df['Close'].iloc[-1])
                 change_pct = ((current_price - prev_close) / prev_close) * 100
                 
-                tech_data['change_pct'] = round(change_pct, 2)
-                tech_data['source'] = 'yfinance'
-                return tech_data
-            else:
-                print(f"⚠️ Could not calculate indicators for {symbol}")
+                print(f"⚠️ Using basic data only for {symbol}")
+                return {
+                    "price": current_price,
+                    "change_pct": round(change_pct, 2),
+                    "source": "yfinance_basic",
+                    "rsi": None,
+                    "macd": None,
+                    "macd_signal": None,
+                    "ema_20": None,
+                    "ema_50": None,
+                    "ema_200": None,
+                    "bb_upper": None,
+                    "bb_lower": None
+                }
+            
+            prev_close = df['Close'].iloc[-2]
+            current_price = tech_data['price']
+            change_pct = ((current_price - prev_close) / prev_close) * 100
+            
+            tech_data['change_pct'] = round(change_pct, 2)
+            tech_data['source'] = 'yfinance'
+            return tech_data
         else:
             print(f"⚠️ Insufficient data from yfinance for {symbol}")
             
@@ -397,23 +417,29 @@ async def fetch_data_waterfall(symbol):
 
     print(f"❌ All sources failed for {symbol}")
     return None
+ 
 
 async def main():
     global supabase
     available_models = get_available_gemini_models()
-    res = supabase.table("stock_master").select("symbol").eq("is_active", True).execute()
     
-    symbols = [item['symbol'] for item in res.data]
+    # ⬇️ แก้ตรงนี้: ดึง category มาด้วย
+    res = supabase.table("stock_master").select("symbol, category").eq("is_active", True).execute()
     
-    if not symbols:
+    stocks = res.data
+    
+    if not stocks:
         print("📭 No active symbols found in stock_master.")
         return
 
-    print(f"\n🚀 Starting analysis for {len(symbols)} symbols\n")
+    print(f"\n🚀 Starting analysis for {len(stocks)} symbols\n")
     
-    for idx, symbol in enumerate(symbols, 1):
+    for idx, stock_data in enumerate(stocks, 1):
+        symbol = stock_data['symbol']
+        category = stock_data.get('category', 'Core')  # ⬅️ ดึง category
+        
         print(f"\n{'='*60}")
-        print(f"[{idx}/{len(symbols)}] Processing: {symbol}")
+        print(f"[{idx}/{len(stocks)}] Processing: {symbol} ({category})")  # ⬅️ แสดง category
         print(f"{'='*60}")
         
         data = await fetch_data_waterfall(symbol)
@@ -434,11 +460,13 @@ async def main():
             data.get("ema_50")
         )
         
-        analyst_pct = fetch_analyst_data(symbol)
-        sentiment = fetch_sentiment_score(symbol)
+        # ⬇️ ข้าม analyst/sentiment สำหรับ ETF
+        analyst_pct = None if category == 'ETF' else fetch_analyst_data(symbol)
+        sentiment = None if category == 'ETF' else fetch_sentiment_score(symbol)
         
         snapshot_payload = {
             "symbol": symbol,
+            "category": category,  # ⬅️ เพิ่ม category
             "price": data.get("price"),
             "change_pct": data.get("change_pct"),
             "rsi": data.get("rsi"),
@@ -455,8 +483,6 @@ async def main():
             "recorded_at": datetime.now().isoformat()
         }
         
-      
-
         max_db_retries = 3
         for db_attempt in range(max_db_retries):
             try:
@@ -467,13 +493,11 @@ async def main():
                 print(f"⚠️ Database error (attempt {db_attempt + 1}/{max_db_retries}): {db_error}")
                 if db_attempt < max_db_retries - 1:
                     await asyncio.sleep(2)
-                    # Reconnect Supabase
                     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
                 else:
                     print(f"❌ Failed to save snapshot for {symbol}")
-                    continue  # ข้ามไปหุ้นถัดไป
+                    break
 
-        
         print(f"🤖 Analyzing {symbol} with Gemini AI...")
         ai_result = analyze_with_gemini(symbol, snapshot_payload)
         
@@ -500,14 +524,12 @@ async def main():
                         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
                     else:
                         print(f"❌ Failed to save AI prediction for {symbol}")
-            print(f"🎯 AI Prediction: {symbol} | Score: {ai_result['overall_score']}/100 | {ai_result['recommendation']}")
-            print(f"   Reasoning: {ai_result['reasoning']}")
+                        break
         else:
             print(f"⚠️ Could not get AI prediction for {symbol}")
         
-        await asyncio.sleep(3)  # ลดเหลือ 3 วินาที เพราะมี key rotation แล้ว
+        await asyncio.sleep(3)
     
-    # แสดงสถิติการใช้งาน API keys
     print(f"\n{'='*60}")
     print("📊 API Key Usage Statistics:")
     print(f"{'='*60}")
@@ -517,4 +539,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
- #5: 8 requests
