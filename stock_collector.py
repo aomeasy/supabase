@@ -39,9 +39,7 @@ key_cooldown_until = {i: 0 for i in range(len(GEMINI_API_KEYS))}
  
  
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# ตั้งค่า Gemini 
-model = genai.GenerativeModel('models/gemini-2.5-flash')
+ 
 
 def get_next_available_key():
     """หา API key ถัดไปที่พร้อมใช้งาน"""
@@ -85,8 +83,6 @@ def rotate_to_next_key():
     current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
     print(f"🔄 Rotating from Key #{old_index + 1} to Key #{current_key_index + 1}")
 
-
-
 def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
     """ใช้ Gemini วิเคราะห์หุ้น พร้อม key rotation"""
     
@@ -95,9 +91,8 @@ def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
             # หา key ที่พร้อมใช้งาน
             key_index, api_key = get_next_available_key()
             
-            # ✅ ตั้งค่า Gemini ด้วย key ปัจจุบัน (ตรงนี้ถูกต้องแล้ว)
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')  # ⬅️ เปลี่ยนเป็น gemini-1.5-flash
+            # ⬇️ เปลี่ยนวิธีเรียกใช้ API
+            client = genai.Client(api_key=api_key)
             
             # สร้าง prompt
             prompt = f"""
@@ -126,8 +121,12 @@ Respond ONLY in JSON format:
 }}
 """
             
-            # เรียก Gemini API
-            response = model.generate_content(prompt)
+            # ⬇️ เรียก API แบบใหม่
+            response = client.models.generate_content(
+                model='models/gemini-2.5-flash',  # ⬅️ ใช้ชื่อนี้
+                contents=prompt
+            )
+            
             result_text = response.text.strip()
             
             # ลบ markdown code blocks
@@ -176,8 +175,7 @@ Respond ONLY in JSON format:
                 continue
     
     print(f"❌ Failed to analyze {symbol} after {max_retries} attempts")
-    return None
-     
+    return None 
         
 def calculate_technical_indicators(df):
     """คำนวณค่าเทคนิคด้วย TA-Lib"""
