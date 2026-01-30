@@ -94,6 +94,9 @@ def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
         'gemini-pro',
         'models/gemini-1.5-flash',
         'models/gemini-pro'
+        'gemini-2.0-flash-exp',      # ใหม่ล่าสุด
+        'gemini-1.5-flash-latest',   # Stable version
+        'gemini-1.5-pro-latest' 
     ]
     
     for model_name in models_to_try:
@@ -378,6 +381,7 @@ async def fetch_data_waterfall(symbol):
     return None
 
 async def main():
+    global supabase
     res = supabase.table("stock_master").select("symbol").eq("is_active", True).execute()
     symbols = [item['symbol'] for item in res.data]
     
@@ -431,8 +435,24 @@ async def main():
             "recorded_at": datetime.now().isoformat()
         }
         
-        supabase.table("stock_snapshots").insert(snapshot_payload).execute()
-        print(f"✅ Snapshot saved: {symbol}")
+      
+
+        max_db_retries = 3
+        for db_attempt in range(max_db_retries):
+            try:
+                supabase.table("stock_snapshots").insert(snapshot_payload).execute()
+                print(f"✅ Snapshot saved: {symbol}")
+                break
+            except Exception as db_error:
+                print(f"⚠️ Database error (attempt {db_attempt + 1}/{max_db_retries}): {db_error}")
+                if db_attempt < max_db_retries - 1:
+                    await asyncio.sleep(2)
+                    # Reconnect Supabase
+                    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+                else:
+                    print(f"❌ Failed to save snapshot for {symbol}")
+                    continue  # ข้ามไปหุ้นถัดไป
+
         
         print(f"🤖 Analyzing {symbol} with Gemini AI...")
         ai_result = analyze_with_gemini(symbol, snapshot_payload)
@@ -446,8 +466,20 @@ async def main():
                 "price_at_prediction": data.get("price"),
                 "created_at": datetime.now().isoformat()
             }
-            
-            supabase.table("ai_predictions").insert(prediction_payload).execute()
+             
+            for db_attempt in range(max_db_retries):
+                try:
+                    supabase.table("ai_predictions").insert(prediction_payload).execute()
+                    print(f"🎯 AI Prediction: {symbol} | Score: {ai_result['overall_score']}/100 | {ai_result['recommendation']}")
+                    print(f"   Reasoning: {ai_result['reasoning']}")
+                    break
+                except Exception as db_error:
+                    print(f"⚠️ Database error saving prediction (attempt {db_attempt + 1}/{max_db_retries}): {db_error}")
+                    if db_attempt < max_db_retries - 1:
+                        await asyncio.sleep(2)
+                        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+                    else:
+                        print(f"❌ Failed to save AI prediction for {symbol}")
             print(f"🎯 AI Prediction: {symbol} | Score: {ai_result['overall_score']}/100 | {ai_result['recommendation']}")
             print(f"   Reasoning: {ai_result['reasoning']}")
         else:
