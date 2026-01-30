@@ -8,19 +8,35 @@ import requests
 from datetime import datetime
 import google.generativeai as genai  
 import json
+import time
 
 # --- Configuration ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
+GEMINI_API_KEYS = [
+    os.getenv("GEMINI_API_KEY_1"),
+    os.getenv("GEMINI_API_KEY_2"),
+    os.getenv("GEMINI_API_KEY_3"),
+    os.getenv("GEMINI_API_KEY_4"),
+    os.getenv("GEMINI_API_KEY_5"),
+]
 
-# เช็ค env vars
+# กรองเฉพาะ keys ที่ไม่เป็น None
+GEMINI_API_KEYS = [key for key in GEMINI_API_KEYS if key]
+
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY in environment variables")
+    raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY")
 
-if not GEMINI_API_KEY:
-    raise ValueError("❌ Missing GEMINI_API_KEY")
+if not GEMINI_API_KEYS:
+    raise ValueError("❌ No GEMINI_API_KEY found")
+
+print(f"✅ Loaded {len(GEMINI_API_KEYS)} Gemini API keys")
+# ตัวแปรติดตามการใช้งาน key
+current_key_index = 0
+key_usage_count = {i: 0 for i in range(len(GEMINI_API_KEYS))}
+key_cooldown_until = {i: 0 for i in range(len(GEMINI_API_KEYS))}
+ 
  
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -28,11 +44,64 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('models/gemini-2.5-flash')
 
-def analyze_with_gemini(symbol, snapshot_data):
-    """ใช้ Gemini วิเคราะห์หุ้นและให้คำแนะนำ"""
-    try:
-        # สร้าง prompt สำหรับ Gemini
-        prompt = f"""
+def get_next_available_key():
+    """หา API key ถัดไปที่พร้อมใช้งาน"""
+    global current_key_index
+    
+    current_time = time.time()
+    attempts = 0
+    max_attempts = len(GEMINI_API_KEYS) * 2  # ลองวนไปมา 2 รอบ
+    
+    while attempts < max_attempts:
+        # ตรวจสอบว่า key ปัจจุบันพร้อมใช้งานหรือไม่
+        if current_time >= key_cooldown_until[current_key_index]:
+            key = GEMINI_API_KEYS[current_key_index]
+            print(f"🔑 Using API Key #{current_key_index + 1} (Used: {key_usage_count[current_key_index]} times)")
+            return current_key_index, key
+        
+        # ถ้าไม่พร้อม ไปใช้ key ถัดไป
+        current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
+        attempts += 1
+    
+    # ถ้าไม่มี key ไหนพร้อม ให้รอและใช้ key แรก
+    wait_time = min(key_cooldown_until.values()) - current_time
+    if wait_time > 0:
+        print(f"⏳ All keys are on cooldown. Waiting {wait_time:.1f} seconds...")
+        time.sleep(wait_time + 1)
+    
+    current_key_index = 0
+    return 0, GEMINI_API_KEYS[0]
+
+
+def mark_key_as_rate_limited(key_index, cooldown_seconds=60):
+    """ทำเครื่องหมาย key ว่าเกิน rate limit และต้องพัก"""
+    key_cooldown_until[key_index] = time.time() + cooldown_seconds
+    print(f"⚠️ API Key #{key_index + 1} rate limited. Cooldown for {cooldown_seconds}s")
+
+
+def rotate_to_next_key():
+    """สลับไปใช้ key ถัดไป"""
+    global current_key_index
+    old_index = current_key_index
+    current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
+    print(f"🔄 Rotating from Key #{old_index + 1} to Key #{current_key_index + 1}")
+
+
+
+def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
+    """ใช้ Gemini วิเคราะห์หุ้น พร้อม key rotation"""
+    
+    for attempt in range(max_retries):
+        try:
+            # หา key ที่พร้อมใช้งาน
+            key_index, api_key = get_next_available_key()
+            
+            # ตั้งค่า Gemini ด้วย key ปัจจุบัน
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-pro')
+            
+            # สร้าง prompt
+            prompt = f"""
 You are a professional stock analyst. Analyze the following stock data and provide:
 1. overall_score (0-100): Overall investment attractiveness
 2. recommendation: One of ["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"]
@@ -57,33 +126,63 @@ Respond ONLY in JSON format:
   "reasoning": "<brief explanation>"
 }}
 """
+            
+            # เรียก Gemini API
+            response = model.generate_content(prompt)
+            result_text = response.text.strip()
+            
+            # ลบ markdown code blocks
+            if result_text.startswith("```json"):
+                result_text = result_text.replace("```json", "").replace("```", "").strip()
+            elif result_text.startswith("```"):
+                result_text = result_text.replace("```", "").strip()
+            
+            # Parse JSON
+            result = json.loads(result_text)
+            
+            # ✅ สำเร็จ - นับการใช้งาน
+            key_usage_count[key_index] += 1
+            
+            return {
+                "overall_score": int(result.get("overall_score", 50)),
+                "recommendation": result.get("recommendation", "Hold"),
+                "reasoning": result.get("reasoning", "")
+            }
         
-        # เรียก Gemini API
-        response = model.generate_content(prompt)
-        result_text = response.text.strip()
-        
-        # ลบ markdown code blocks ถ้ามี
-        if result_text.startswith("```json"):
-            result_text = result_text.replace("```json", "").replace("```", "").strip()
-        elif result_text.startswith("```"):
-            result_text = result_text.replace("```", "").strip()
-        
-        # Parse JSON
-        result = json.loads(result_text)
-        
-        return {
-            "overall_score": int(result.get("overall_score", 50)),
-            "recommendation": result.get("recommendation", "Hold"),
-            "reasoning": result.get("reasoning", "")
-        }
-        
-    except json.JSONDecodeError as e:
-        print(f"⚠️ JSON parse error for {symbol}: {e}")
-        print(f"Response: {result_text[:200]}")
-        return None
-    except Exception as e:
-        print(f"⚠️ Gemini API error for {symbol}: {e}")
-        return None
+        except json.JSONDecodeError as e:
+            print(f"⚠️ JSON parse error for {symbol} (attempt {attempt + 1}/{max_retries}): {e}")
+            print(f"Response: {result_text[:200]}")
+            
+            # ลองใหม่ด้วย key เดิม
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            
+            # ตรวจสอบว่าเป็น rate limit error หรือไม่
+            if "rate limit" in error_msg or "quota" in error_msg or "429" in error_msg:
+                print(f"⚠️ Rate limit hit for {symbol} with Key #{key_index + 1}")
+                mark_key_as_rate_limited(key_index, cooldown_seconds=60)
+                rotate_to_next_key()
+                
+                # ลองใหม่ด้วย key ถัดไป
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+            else:
+                print(f"⚠️ Gemini API error for {symbol}: {e}")
+            
+            # ถ้าเป็น error อื่นและยังลองได้อีก
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+    
+    # ลองครบทุก retry แล้วยังไม่สำเร็จ
+    print(f"❌ Failed to analyze {symbol} after {max_retries} attempts")
+    return None
+     
         
 def calculate_technical_indicators(df):
     """คำนวณค่าเทคนิคด้วย TA-Lib"""
@@ -272,8 +371,13 @@ async def main():
         print("📭 No active symbols found in stock_master.")
         return
 
-    for symbol in symbols:
-        # 1. ดึงข้อมูลหุ้น
+    print(f"\n🚀 Starting analysis for {len(symbols)} symbols\n")
+    
+    for idx, symbol in enumerate(symbols, 1):
+        print(f"\n{'='*60}")
+        print(f"[{idx}/{len(symbols)}] Processing: {symbol}")
+        print(f"{'='*60}")
+        
         data = await fetch_data_waterfall(symbol)
         
         if not data:
@@ -281,7 +385,6 @@ async def main():
             await asyncio.sleep(5)
             continue
         
-        # 2. คำนวณค่าเพิ่มเติม
         if not data.get("ema_200"):
             print(f"⚠️ {symbol}: No EMA 200 data")
         
@@ -296,7 +399,6 @@ async def main():
         analyst_pct = fetch_analyst_data(symbol)
         sentiment = fetch_sentiment_score(symbol)
         
-        # 3. บันทึกลง stock_snapshots
         snapshot_payload = {
             "symbol": symbol,
             "price": data.get("price"),
@@ -318,12 +420,10 @@ async def main():
         supabase.table("stock_snapshots").insert(snapshot_payload).execute()
         print(f"✅ Snapshot saved: {symbol}")
         
-        # 4. วิเคราะห์ด้วย Gemini AI
         print(f"🤖 Analyzing {symbol} with Gemini AI...")
         ai_result = analyze_with_gemini(symbol, snapshot_payload)
         
         if ai_result:
-            # 5. บันทึกลง ai_predictions
             prediction_payload = {
                 "symbol": symbol,
                 "ai_model": "gemini-pro",
@@ -339,8 +439,16 @@ async def main():
         else:
             print(f"⚠️ Could not get AI prediction for {symbol}")
         
-        # หน่วงเวลาเพื่อไม่ให้โดน rate limit
-        await asyncio.sleep(8)  # เพิ่มเป็น 8 วินาที (เพราะเรียก Gemini API)
+        await asyncio.sleep(3)  # ลดเหลือ 3 วินาที เพราะมี key rotation แล้ว
+    
+    # แสดงสถิติการใช้งาน API keys
+    print(f"\n{'='*60}")
+    print("📊 API Key Usage Statistics:")
+    print(f"{'='*60}")
+    for i, count in key_usage_count.items():
+        print(f"Key #{i + 1}: {count} requests")
+    print(f"{'='*60}\n")
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
+ #5: 8 requests
