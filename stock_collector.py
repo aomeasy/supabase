@@ -40,7 +40,26 @@ key_cooldown_until = {i: 0 for i in range(len(GEMINI_API_KEYS))}
  
  
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
- 
+
+
+def get_available_gemini_models():
+    """ดึงรายชื่อ model ที่ใช้ได้จริงจาก API"""
+    try:
+        key_index, api_key = get_next_available_key()
+        genai.configure(api_key=api_key)
+        
+        available_models = []
+        for model in genai.list_models():
+            if 'generateContent' in model.supported_generation_methods:
+                available_models.append(model.name.replace('models/', ''))
+        
+        print(f"✅ Available models: {available_models}")
+        return available_models
+    except Exception as e:
+        print(f"⚠️ Could not list models: {e}")
+        # fallback ไปใช้ model พื้นฐาน
+        return ['gemini-pro']
+        
 
 def get_next_available_key():
     """หา API key ถัดไปที่พร้อมใช้งาน"""
@@ -382,7 +401,9 @@ async def fetch_data_waterfall(symbol):
 
 async def main():
     global supabase
+    available_models = get_available_gemini_models()
     res = supabase.table("stock_master").select("symbol").eq("is_active", True).execute()
+    
     symbols = [item['symbol'] for item in res.data]
     
     if not symbols:
