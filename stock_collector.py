@@ -106,7 +106,7 @@ def rotate_to_next_key():
 
 
 def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
-    """ใช้ Gemini วิเคราะห์หุ้น พร้อม key rotation และ model fallback"""
+    """ใช้ Gemini วิเคราะห์หุ้น/ETF พร้อม key rotation และ model fallback"""
     
     # ⬇️ ใช้ model ที่มีจริงจากรายการที่ได้
     models_to_try = [
@@ -116,6 +116,9 @@ def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
         'gemini-pro-latest',           # Pro version
         'gemini-2.5-pro',              # Pro 2.5
     ]
+    
+    # ตรวจสอบว่าเป็น ETF หรือไม่
+    is_etf = snapshot_data.get('category') == 'ETF'
     
     for model_name in models_to_try:
         for attempt in range(max_retries):
@@ -129,8 +132,29 @@ def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
                 
                 print(f"🤖 Trying model: {model_name}")
                 
-                # สร้าง prompt
-                prompt = f"""
+                # สร้าง prompt ตาม type
+                if is_etf:
+                    prompt = f"""
+You are a professional ETF analyst. Analyze the following ETF data and provide:
+1. overall_score (0-100): Overall investment attractiveness for ETF
+2. recommendation: One of ["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"]
+3. Brief reasoning (2-3 sentences focusing on ETF characteristics)
+
+ETF: {symbol}
+Current Price: ${snapshot_data.get('price', 'N/A')}
+Change %: {snapshot_data.get('change_pct', 'N/A')}%
+
+Note: This is an ETF (Exchange-Traded Fund). Analyze based on market trend and diversification benefits.
+
+Respond ONLY in JSON format:
+{{
+  "overall_score": <number 0-100>,
+  "recommendation": "<Strong Buy/Buy/Hold/Sell/Strong Sell>",
+  "reasoning": "<brief explanation>"
+}}
+"""
+                else:
+                    prompt = f"""
 You are a professional stock analyst. Analyze the following stock data and provide:
 1. overall_score (0-100): Overall investment attractiveness
 2. recommendation: One of ["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"]
@@ -338,7 +362,6 @@ def fetch_sentiment_score(symbol):
     return None
 
 
-
 async def fetch_data_waterfall(symbol):
     """กลยุทธ์ดึงข้อมูลแบบน้ำตก: yfinance -> Twelve Data"""
     print(f"🔍 Fetching data for {symbol}...")
@@ -351,7 +374,7 @@ async def fetch_data_waterfall(symbol):
         if not df.empty and len(df) >= 2:
             tech_data = calculate_technical_indicators(df)
             
-            # ⬇️ เพิ่มส่วนนี้: ถ้าคำนวณไม่ได้ (ETF หรือข้อมูลน้อย)
+            # ถ้าคำนวณไม่ได้ (ETF หรือข้อมูลน้อย) ใช้ข้อมูลพื้นฐาน
             if not tech_data:
                 prev_close = df['Close'].iloc[-2]
                 current_price = float(df['Close'].iloc[-1])
@@ -417,15 +440,13 @@ async def fetch_data_waterfall(symbol):
 
     print(f"❌ All sources failed for {symbol}")
     return None
- 
 
 async def main():
     global supabase
     available_models = get_available_gemini_models()
     
-    # ⬇️ แก้ตรงนี้: ดึง category มาด้วย
+    # ดึงทั้ง symbol และ category
     res = supabase.table("stock_master").select("symbol, category").eq("is_active", True).execute()
-    
     stocks = res.data
     
     if not stocks:
@@ -436,10 +457,10 @@ async def main():
     
     for idx, stock_data in enumerate(stocks, 1):
         symbol = stock_data['symbol']
-        category = stock_data.get('category', 'Core')  # ⬅️ ดึง category
+        category = stock_data.get('category', 'Core')
         
         print(f"\n{'='*60}")
-        print(f"[{idx}/{len(stocks)}] Processing: {symbol} ({category})")  # ⬅️ แสดง category
+        print(f"[{idx}/{len(stocks)}] Processing: {symbol} ({category})")
         print(f"{'='*60}")
         
         data = await fetch_data_waterfall(symbol)
@@ -460,10 +481,11 @@ async def main():
             data.get("ema_50")
         )
         
-        # ⬇️ ข้าม analyst/sentiment สำหรับ ETF
+        # ข้าม analyst/sentiment สำหรับ ETF
         analyst_pct = None if category == 'ETF' else fetch_analyst_data(symbol)
         sentiment = None if category == 'ETF' else fetch_sentiment_score(symbol)
         
+        # ⬇️ แก้ไขตรงนี้: ไม่ใส่ category ใน snapshot_payload
         snapshot_payload = {
             "symbol": symbol,
             "price": data.get("price"),
@@ -482,6 +504,7 @@ async def main():
             "recorded_at": datetime.now().isoformat()
         }
         
+        # บันทึก snapshot
         max_db_retries = 3
         for db_attempt in range(max_db_retries):
             try:
@@ -497,10 +520,10 @@ async def main():
                     print(f"❌ Failed to save snapshot for {symbol}")
                     break
 
+        # ⬇️ แก้ไขตรงนี้: เพิ่ม category ชั่วคราวสำหรับส่งให้ AI
         print(f"🤖 Analyzing {symbol} with Gemini AI...")
-        snapshot_payload['category'] = category  # เพิ่ม category ชั่วคราวสำหรับ AI
-        ai_result = analyze_with_gemini(symbol, snapshot_payload)
-        del snapshot_payload['category']  # ลบออกก่อนบันทึกฐานข้อมูล (ถ้ายังไม่ได้บันทึก)
+        snapshot_with_category = {**snapshot_payload, "category": category}
+        ai_result = analyze_with_gemini(symbol, snapshot_with_category)
         
         if ai_result:
             prediction_payload = {
@@ -531,6 +554,7 @@ async def main():
         
         await asyncio.sleep(3)
     
+    # แสดงสถิติการใช้งาน API keys
     print(f"\n{'='*60}")
     print("📊 API Key Usage Statistics:")
     print(f"{'='*60}")
