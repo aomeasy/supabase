@@ -466,7 +466,6 @@ async def main():
         
         snapshot_payload = {
             "symbol": symbol,
-            "category": category,  # ⬅️ เพิ่ม category
             "price": data.get("price"),
             "change_pct": data.get("change_pct"),
             "rsi": data.get("rsi"),
@@ -499,7 +498,9 @@ async def main():
                     break
 
         print(f"🤖 Analyzing {symbol} with Gemini AI...")
+        snapshot_payload['category'] = category  # เพิ่ม category ชั่วคราวสำหรับ AI
         ai_result = analyze_with_gemini(symbol, snapshot_payload)
+        del snapshot_payload['category']  # ลบออกก่อนบันทึกฐานข้อมูล (ถ้ายังไม่ได้บันทึก)
         
         if ai_result:
             prediction_payload = {
