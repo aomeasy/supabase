@@ -6,18 +6,85 @@ import talib
 from supabase import create_client, Client
 import requests
 from datetime import datetime
+import google.generativeai as genai  
+import json
 
 # --- Configuration ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
 
 # เช็ค env vars
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY in environment variables")
 
+if not GEMINI_API_KEY:
+    raise ValueError("❌ Missing GEMINI_API_KEY")
+ 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# ตั้งค่า Gemini
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('models/gemini-2.5-flash')
+
+def analyze_with_gemini(symbol, snapshot_data):
+    """ใช้ Gemini วิเคราะห์หุ้นและให้คำแนะนำ"""
+    try:
+        # สร้าง prompt สำหรับ Gemini
+        prompt = f"""
+You are a professional stock analyst. Analyze the following stock data and provide:
+1. overall_score (0-100): Overall investment attractiveness
+2. recommendation: One of ["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"]
+3. Brief reasoning (2-3 sentences)
+
+Stock: {symbol}
+Current Price: ${snapshot_data.get('price', 'N/A')}
+Change %: {snapshot_data.get('change_pct', 'N/A')}%
+RSI: {snapshot_data.get('rsi', 'N/A')}
+MACD: {snapshot_data.get('macd', 'N/A')}
+EMA 20: ${snapshot_data.get('ema_20', 'N/A')}
+EMA 50: ${snapshot_data.get('ema_50', 'N/A')}
+EMA 200: ${snapshot_data.get('ema_200', 'N/A')}
+Upside Potential: {snapshot_data.get('upside_pct', 'N/A')}%
+Analyst Buy %: {snapshot_data.get('analyst_buy_pct', 'N/A')}%
+Sentiment Score: {snapshot_data.get('sentiment_score', 'N/A')}
+
+Respond ONLY in JSON format:
+{{
+  "overall_score": <number 0-100>,
+  "recommendation": "<Strong Buy/Buy/Hold/Sell/Strong Sell>",
+  "reasoning": "<brief explanation>"
+}}
+"""
+        
+        # เรียก Gemini API
+        response = model.generate_content(prompt)
+        result_text = response.text.strip()
+        
+        # ลบ markdown code blocks ถ้ามี
+        if result_text.startswith("```json"):
+            result_text = result_text.replace("```json", "").replace("```", "").strip()
+        elif result_text.startswith("```"):
+            result_text = result_text.replace("```", "").strip()
+        
+        # Parse JSON
+        result = json.loads(result_text)
+        
+        return {
+            "overall_score": int(result.get("overall_score", 50)),
+            "recommendation": result.get("recommendation", "Hold"),
+            "reasoning": result.get("reasoning", "")
+        }
+        
+    except json.JSONDecodeError as e:
+        print(f"⚠️ JSON parse error for {symbol}: {e}")
+        print(f"Response: {result_text[:200]}")
+        return None
+    except Exception as e:
+        print(f"⚠️ Gemini API error for {symbol}: {e}")
+        return None
+        
 def calculate_technical_indicators(df):
     """คำนวณค่าเทคนิคด้วย TA-Lib"""
     try:
@@ -197,7 +264,6 @@ async def fetch_data_waterfall(symbol):
     print(f"❌ All sources failed for {symbol}")
     return None
 
-
 async def main():
     res = supabase.table("stock_master").select("symbol").eq("is_active", True).execute()
     symbols = [item['symbol'] for item in res.data]
@@ -207,47 +273,74 @@ async def main():
         return
 
     for symbol in symbols:
+        # 1. ดึงข้อมูลหุ้น
         data = await fetch_data_waterfall(symbol)
         
-        if data:
-            if not data.get("ema_200"):
-                print(f"⚠️ {symbol}: No EMA 200 data")
-            
-            print(f"📊 Calculating additional metrics for {symbol}...")
-            
-            upside_pct = calculate_upside_pct(
-                data.get("price"), 
-                data.get("ema_200"),
-                data.get("ema_50")
-            )
-            
-            analyst_pct = fetch_analyst_data(symbol)
-            sentiment = fetch_sentiment_score(symbol)
-            
-            payload = {
+        if not data:
+            print(f"❌ Failed: {symbol}")
+            await asyncio.sleep(5)
+            continue
+        
+        # 2. คำนวณค่าเพิ่มเติม
+        if not data.get("ema_200"):
+            print(f"⚠️ {symbol}: No EMA 200 data")
+        
+        print(f"📊 Calculating metrics for {symbol}...")
+        
+        upside_pct = calculate_upside_pct(
+            data.get("price"), 
+            data.get("ema_200"),
+            data.get("ema_50")
+        )
+        
+        analyst_pct = fetch_analyst_data(symbol)
+        sentiment = fetch_sentiment_score(symbol)
+        
+        # 3. บันทึกลง stock_snapshots
+        snapshot_payload = {
+            "symbol": symbol,
+            "price": data.get("price"),
+            "change_pct": data.get("change_pct"),
+            "rsi": data.get("rsi"),
+            "macd": data.get("macd"),
+            "macd_signal": data.get("macd_signal"),
+            "ema_20": data.get("ema_20"),
+            "ema_50": data.get("ema_50"),
+            "ema_200": data.get("ema_200"),
+            "bb_upper": data.get("bb_upper"),
+            "bb_lower": data.get("bb_lower"),
+            "upside_pct": upside_pct,
+            "analyst_buy_pct": analyst_pct,
+            "sentiment_score": sentiment,
+            "recorded_at": datetime.now().isoformat()
+        }
+        
+        supabase.table("stock_snapshots").insert(snapshot_payload).execute()
+        print(f"✅ Snapshot saved: {symbol}")
+        
+        # 4. วิเคราะห์ด้วย Gemini AI
+        print(f"🤖 Analyzing {symbol} with Gemini AI...")
+        ai_result = analyze_with_gemini(symbol, snapshot_payload)
+        
+        if ai_result:
+            # 5. บันทึกลง ai_predictions
+            prediction_payload = {
                 "symbol": symbol,
-                "price": data.get("price"),
-                "change_pct": data.get("change_pct"),
-                "rsi": data.get("rsi"),
-                "macd": data.get("macd"),
-                "macd_signal": data.get("macd_signal"),
-                "ema_20": data.get("ema_20"),
-                "ema_50": data.get("ema_50"),
-                "ema_200": data.get("ema_200"),
-                "bb_upper": data.get("bb_upper"),
-                "bb_lower": data.get("bb_lower"),
-                "upside_pct": upside_pct,
-                "analyst_buy_pct": analyst_pct,
-                "sentiment_score": sentiment,
-                "recorded_at": datetime.now().isoformat()
+                "ai_model": "gemini-pro",
+                "overall_score": ai_result["overall_score"],
+                "recommendation": ai_result["recommendation"],
+                "price_at_prediction": data.get("price"),
+                "created_at": datetime.now().isoformat()
             }
             
-            supabase.table("stock_snapshots").insert(payload).execute()
-            print(f"✅ {symbol} | Analyst: {analyst_pct}% | Sentiment: {sentiment}")
+            supabase.table("ai_predictions").insert(prediction_payload).execute()
+            print(f"🎯 AI Prediction: {symbol} | Score: {ai_result['overall_score']}/100 | {ai_result['recommendation']}")
+            print(f"   Reasoning: {ai_result['reasoning']}")
         else:
-            print(f"❌ Failed: {symbol}")
-            
-        await asyncio.sleep(5)
+            print(f"⚠️ Could not get AI prediction for {symbol}")
+        
+        # หน่วงเวลาเพื่อไม่ให้โดน rate limit
+        await asyncio.sleep(8)  # เพิ่มเป็น 8 วินาที (เพราะเรียก Gemini API)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main()) 
