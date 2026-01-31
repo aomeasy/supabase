@@ -13,7 +13,14 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_KEY")
 FINNHUB_KEY = os.getenv("FINNHUB_KEY") 
+ 
 
+# Debug
+if FINNHUB_KEY:
+    print(f"✅ FINNHUB_KEY loaded: {FINNHUB_KEY[:10]}...{FINNHUB_KEY[-4:]}")
+else:
+    print("❌ FINNHUB_KEY not found")
+    
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY")
 
