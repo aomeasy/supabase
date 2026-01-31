@@ -23,7 +23,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 def calculate_overall_score(symbol, tech_data, fundamental_data, news_sentiment):
     """
     คำนวณ Overall Score จากข้อมูลต่างๆ โดยไม่ใช้ AI API
-    Score: 0-100
+    Score: 0-100 (integer)
     """
     
     score = 50  # เริ่มที่ 50 (กลางๆ)
@@ -34,19 +34,18 @@ def calculate_overall_score(symbol, tech_data, fundamental_data, news_sentiment)
     # RSI (10 คะแนน)
     rsi = tech_data.get('rsi')
     if rsi:
-        if 30 <= rsi <= 70:  # Sweet spot
+        if 30 <= rsi <= 70:
             technical_score += 10
-        elif 20 <= rsi < 30 or 70 < rsi <= 80:  # OK zone
+        elif 20 <= rsi < 30 or 70 < rsi <= 80:
             technical_score += 5
-        # < 20 หรือ > 80 = 0 คะแนน (oversold/overbought)
     
     # MACD (10 คะแนน)
     macd = tech_data.get('macd')
     macd_signal = tech_data.get('macd_signal')
     if macd and macd_signal:
-        if macd > macd_signal:  # Bullish crossover
+        if macd > macd_signal:
             technical_score += 10
-        elif macd > macd_signal * 0.9:  # ใกล้จะ crossover
+        elif macd > macd_signal * 0.9:
             technical_score += 5
     
     # EMA Trend (10 คะแนน)
@@ -56,9 +55,9 @@ def calculate_overall_score(symbol, tech_data, fundamental_data, news_sentiment)
     ema_200 = tech_data.get('ema_200')
     
     if price and ema_20 and ema_50:
-        if price > ema_20 > ema_50:  # Strong uptrend
+        if price > ema_20 > ema_50:
             technical_score += 10
-        elif price > ema_20:  # Moderate uptrend
+        elif price > ema_20:
             technical_score += 5
     
     # Upside Potential (10 คะแนน)
@@ -71,32 +70,29 @@ def calculate_overall_score(symbol, tech_data, fundamental_data, news_sentiment)
         elif upside_pct > 5:
             technical_score += 4
     
-    score += (technical_score / 40) * 40  # แปลงเป็น 0-40
+    score += (technical_score / 40) * 40
     
     
-    # === 2. Fundamental Score (30 คะแนน) - สำหรับหุ้นเท่านั้น ===
+    # === 2. Fundamental Score (30 คะแนน) ===
     fundamental_score = 0
     
     if fundamental_data:
-        # P/E Ratio (10 คะแนน)
         pe_ratio = fundamental_data.get('pe_ratio')
         if pe_ratio:
-            if 10 <= pe_ratio <= 25:  # Value zone
+            if 10 <= pe_ratio <= 25:
                 fundamental_score += 10
             elif 5 <= pe_ratio < 10 or 25 < pe_ratio <= 35:
                 fundamental_score += 5
         
-        # PEG Ratio (10 คะแนน)
         peg_ratio = fundamental_data.get('peg_ratio')
         if peg_ratio:
-            if peg_ratio < 1:  # GARP sweet spot
+            if peg_ratio < 1:
                 fundamental_score += 10
             elif 1 <= peg_ratio <= 1.5:
                 fundamental_score += 7
             elif 1.5 < peg_ratio <= 2:
                 fundamental_score += 4
         
-        # EPS Growth (10 คะแนน)
         eps_growth = fundamental_data.get('eps_growth_pct')
         if eps_growth:
             if eps_growth > 20:
@@ -106,23 +102,20 @@ def calculate_overall_score(symbol, tech_data, fundamental_data, news_sentiment)
             elif eps_growth > 5:
                 fundamental_score += 4
     
-    score += (fundamental_score / 30) * 30  # แปลงเป็น 0-30
+    score += (fundamental_score / 30) * 30
     
     
     # === 3. Sentiment Score (30 คะแนน) ===
     sentiment_score = 0
     
-    # News Sentiment (15 คะแนน)
     if news_sentiment:
-        if news_sentiment > 0.5:  # Very positive
+        if news_sentiment > 0.5:
             sentiment_score += 15
-        elif news_sentiment > 0.2:  # Positive
+        elif news_sentiment > 0.2:
             sentiment_score += 10
-        elif news_sentiment >= -0.2:  # Neutral
+        elif news_sentiment >= -0.2:
             sentiment_score += 5
-        # Negative = 0 คะแนน
     
-    # Analyst Rating (15 คะแนน)
     analyst_buy_pct = tech_data.get('analyst_buy_pct')
     if analyst_buy_pct:
         if analyst_buy_pct >= 70:
@@ -132,11 +125,10 @@ def calculate_overall_score(symbol, tech_data, fundamental_data, news_sentiment)
         elif analyst_buy_pct >= 30:
             sentiment_score += 5
     
-    score += (sentiment_score / 30) * 30  # แปลงเป็น 0-30
+    score += (sentiment_score / 30) * 30
     
-    
-    # ปัดเศษเป็น 0-100
-    return min(100, max(0, round(score, 2)))
+    # ⬇️ แก้ไขตรงนี้: แปลงเป็น int
+    return int(min(100, max(0, round(score))))  # ✅ คืนค่าเป็น integer
 
 
 def generate_recommendation(overall_score, price, upside_pct):
