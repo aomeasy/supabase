@@ -9,6 +9,7 @@ from datetime import datetime
 import google.generativeai as genai  
 import json
 import time
+from groq import Groq  # เพิ่มตัวนี้
 
 
 # --- Configuration ---
@@ -22,6 +23,7 @@ GEMINI_API_KEYS = [
     os.getenv("GEMINI_API_KEY_4"),
     os.getenv("GEMINI_API_KEY_5"),
 ]
+GROQ_API_KEY = os.getenv("GROQ_API_KEY") # เพิ่ม API Key ของ Groq
 
 # กรองเฉพาะ keys ที่ไม่เป็น None
 GEMINI_API_KEYS = [key for key in GEMINI_API_KEYS if key]
@@ -41,6 +43,39 @@ key_cooldown_until = {i: 0 for i in range(len(GEMINI_API_KEYS))}
  
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+def analyze_with_groq(symbol, snapshot_data):
+    """ฟังก์ชันสำรองใช้ Groq (Llama 3) วิเคราะห์หุ้นเมื่อ Gemini ขัดข้อง"""
+    if not GROQ_API_KEY:
+        return None
+
+    try:
+        client = Groq(api_key=GROQ_API_KEY)
+        is_etf = snapshot_data.get('category') == 'ETF'
+        
+        # ปรับ Prompt ให้กระชับสำหรับ Llama
+        prompt = f"Analyze {symbol} ({'ETF' if is_etf else 'Stock'}). Price: {snapshot_data.get('price')}, Change: {snapshot_data.get('change_pct')}%. "
+        if not is_etf:
+            prompt += f"RSI: {snapshot_data.get('rsi')}, Upside: {snapshot_data.get('upside_pct')}%."
+        
+        prompt += " Respond ONLY JSON: {\"overall_score\": 0-100, \"recommendation\": \"Buy/Hold/Sell\", \"reasoning\": \"...\"}"
+
+        print(f"🚀 Using Groq (Llama-3) as fallback for {symbol}")
+        
+        chat_completion = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama3-70b-8192", # หรือใช้ llama3-8b-8192 เพื่อความเร็ว
+            response_format={"type": "json_object"}
+        )
+        
+        result = json.loads(chat_completion.choices[0].message.content)
+        return {
+            "overall_score": int(result.get("overall_score", 50)),
+            "recommendation": result.get("recommendation", "Hold"),
+            "reasoning": "[Groq] " + result.get("reasoning", "")
+        }
+    except Exception as e:
+        print(f"❌ Groq API error: {e}")
+        return None
 
 def get_available_gemini_models():
     """ดึงรายชื่อ model ที่ใช้ได้จริงจาก API"""
@@ -524,6 +559,13 @@ async def main():
         print(f"🤖 Analyzing {symbol} with Gemini AI...")
         snapshot_with_category = {**snapshot_payload, "category": category}
         ai_result = analyze_with_gemini(symbol, snapshot_with_category)
+
+        # --- เพิ่ม Logic Fallback ตรงนี้ ---
+        if not ai_result:
+            print(f"🔄 Gemini failed all attempts. Switching to Groq fallback for {symbol}...")
+            ai_result = analyze_with_groq(symbol, snapshot_with_category)
+        # -------------------------------
+
         
         if ai_result:
             prediction_payload = {
