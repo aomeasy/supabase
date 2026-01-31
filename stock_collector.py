@@ -6,6 +6,7 @@ import talib
 from supabase import create_client, Client
 import requests 
 from datetime import datetime, timedelta
+from deep_translator import GoogleTranslator 
 
 
 # --- Configuration ---
