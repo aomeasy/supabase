@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_KEY")
+FINNHUB_KEY = os.getenv("FINNHUB_KEY") 
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY")
