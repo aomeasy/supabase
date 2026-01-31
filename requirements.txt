@@ -5,3 +5,4 @@ ta-lib
 requests
 python-dotenv 
 google-generativeai
+groq>=0.4.0
