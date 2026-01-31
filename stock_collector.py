@@ -6,43 +6,18 @@ import talib
 from supabase import create_client, Client
 import requests
 from datetime import datetime
-import google.generativeai as genai  
-import json
-import time
-from groq import Groq  # เพิ่มตัวนี้
 
 
 # --- Configuration ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_KEY")
-GEMINI_API_KEYS = [
-    os.getenv("GEMINI_API_KEY_1"),
-    os.getenv("GEMINI_API_KEY_2"),
-    os.getenv("GEMINI_API_KEY_3"),
-    os.getenv("GEMINI_API_KEY_4"),
-    os.getenv("GEMINI_API_KEY_5"),
-]
-GROQ_API_KEY = os.getenv("GROQ_API_KEY") # เพิ่ม API Key ของ Groq
-
-# กรองเฉพาะ keys ที่ไม่เป็น None
-GEMINI_API_KEYS = [key for key in GEMINI_API_KEYS if key]
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY")
 
-if not GEMINI_API_KEYS:
-    raise ValueError("❌ No GEMINI_API_KEY found")
-
-print(f"✅ Loaded {len(GEMINI_API_KEYS)} Gemini API keys")
-# ตัวแปรติดตามการใช้งาน key
-current_key_index = 0
-key_usage_count = {i: 0 for i in range(len(GEMINI_API_KEYS))}
-key_cooldown_until = {i: 0 for i in range(len(GEMINI_API_KEYS))}
- 
- 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
- 
+
     
 def fetch_fundamental_data(symbol):
     """ดึงข้อมูล Fundamental สำหรับกลยุทธ์ GARP"""
@@ -59,241 +34,7 @@ def fetch_fundamental_data(symbol):
     except Exception as e:
         print(f"⚠️ Cannot fetch fundamental data for {symbol}: {e}")
         return {}
-        
-def analyze_with_groq(symbol, snapshot_data):
-    """ฟังก์ชันสำรองใช้ Groq (Llama 3) วิเคราะห์หุ้นเมื่อ Gemini ขัดข้อง"""
-    if not GROQ_API_KEY:
-        return None
 
-    try:
-        client = Groq(api_key=GROQ_API_KEY)
-        is_etf = snapshot_data.get('category') == 'ETF'
-        
-        # ปรับ Prompt ให้กระชับสำหรับ Llama
-        prompt = f"Analyze {symbol} ({'ETF' if is_etf else 'Stock'}). Price: {snapshot_data.get('price')}, Change: {snapshot_data.get('change_pct')}%. "
-        if not is_etf:
-            prompt += f"RSI: {snapshot_data.get('rsi')}, Upside: {snapshot_data.get('upside_pct')}%."
-        
-        prompt += " Respond ONLY JSON: {\"overall_score\": 0-100, \"recommendation\": \"Buy/Hold/Sell\", \"reasoning\": \"...\"}"
-
-        print(f"🚀 Using Groq (Llama-3) as fallback for {symbol}")
-        
-        chat_completion = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="llama3-70b-8192", # หรือใช้ llama3-8b-8192 เพื่อความเร็ว
-            response_format={"type": "json_object"}
-        )
-        
-        result = json.loads(chat_completion.choices[0].message.content)
-        return {
-            "overall_score": int(result.get("overall_score", 50)),
-            "recommendation": result.get("recommendation", "Hold"),
-            "reasoning": "[Groq] " + result.get("reasoning", "")
-        }
-    except Exception as e:
-        print(f"❌ Groq API error: {e}")
-        return None
-
-def get_available_gemini_models():
-    """ดึงรายชื่อ model ที่ใช้ได้จริงจาก API"""
-    try:
-        key_index, api_key = get_next_available_key()
-        genai.configure(api_key=api_key)
-        
-        available_models = []
-        for model in genai.list_models():
-            if 'generateContent' in model.supported_generation_methods:
-                available_models.append(model.name.replace('models/', ''))
-        
-        print(f"✅ Available models: {available_models}")
-        return available_models
-    except Exception as e:
-        print(f"⚠️ Could not list models: {e}")
-        # fallback ไปใช้ model พื้นฐาน
-        return ['gemini-pro']
-        
-
-def get_next_available_key():
-    """หา API key ถัดไปที่พร้อมใช้งาน"""
-    global current_key_index
-    
-    current_time = time.time()
-    attempts = 0
-    max_attempts = len(GEMINI_API_KEYS) * 2  # ลองวนไปมา 2 รอบ
-    
-    while attempts < max_attempts:
-        # ตรวจสอบว่า key ปัจจุบันพร้อมใช้งานหรือไม่
-        if current_time >= key_cooldown_until[current_key_index]:
-            key = GEMINI_API_KEYS[current_key_index]
-            print(f"🔑 Using API Key #{current_key_index + 1} (Used: {key_usage_count[current_key_index]} times)")
-            return current_key_index, key
-        
-        # ถ้าไม่พร้อม ไปใช้ key ถัดไป
-        current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
-        attempts += 1
-    
-    # ถ้าไม่มี key ไหนพร้อม ให้รอและใช้ key แรก
-    wait_time = min(key_cooldown_until.values()) - current_time
-    if wait_time > 0:
-        print(f"⏳ All keys are on cooldown. Waiting {wait_time:.1f} seconds...")
-        time.sleep(wait_time + 1)
-    
-    current_key_index = 0
-    return 0, GEMINI_API_KEYS[0]
-
-
-def mark_key_as_rate_limited(key_index, cooldown_seconds=60):
-    """ทำเครื่องหมาย key ว่าเกิน rate limit และต้องพัก"""
-    key_cooldown_until[key_index] = time.time() + cooldown_seconds
-    print(f"⚠️ API Key #{key_index + 1} rate limited. Cooldown for {cooldown_seconds}s")
-
-
-def rotate_to_next_key():
-    """สลับไปใช้ key ถัดไป"""
-    global current_key_index
-    old_index = current_key_index
-    current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
-    print(f"🔄 Rotating from Key #{old_index + 1} to Key #{current_key_index + 1}")
-
-
-
-def analyze_with_gemini(symbol, snapshot_data, max_retries=3):
-    """ใช้ Gemini วิเคราะห์หุ้น/ETF พร้อม key rotation และ model fallback"""
-    
-    # ⬇️ ใช้ model ที่มีจริงจากรายการที่ได้
-    models_to_try = [
-        'gemini-2.5-flash',           # ใหม่ล่าสุด
-        'gemini-2.0-flash',            # รุ่นก่อนหน้า
-        'gemini-flash-latest',         # Latest stable
-        'gemini-pro-latest',           # Pro version
-        'gemini-2.5-pro',              # Pro 2.5
-    ]
-    
-    # ตรวจสอบว่าเป็น ETF หรือไม่
-    is_etf = snapshot_data.get('category') == 'ETF'
-    
-    for model_name in models_to_try:
-        for attempt in range(max_retries):
-            try:
-                # หา key ที่พร้อมใช้งาน
-                key_index, api_key = get_next_available_key()
-                
-                # ตั้งค่า Gemini
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel(model_name)
-                
-                print(f"🤖 Trying model: {model_name}")
-                
-                # สร้าง prompt ตาม type
-                if is_etf:
-                    prompt = f"""
-You are a professional ETF analyst. Analyze the following ETF data and provide:
-1. overall_score (0-100): Overall investment attractiveness for ETF
-2. recommendation: One of ["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"]
-3. Brief reasoning (2-3 sentences focusing on ETF characteristics)
-
-ETF: {symbol}
-Current Price: ${snapshot_data.get('price', 'N/A')}
-Change %: {snapshot_data.get('change_pct', 'N/A')}%
-
-Note: This is an ETF (Exchange-Traded Fund). Analyze based on market trend and diversification benefits.
-
-Respond ONLY in JSON format:
-{{
-  "overall_score": <number 0-100>,
-  "recommendation": "<Strong Buy/Buy/Hold/Sell/Strong Sell>",
-  "reasoning": "<brief explanation>"
-}}
-"""
-                else:
-                    prompt = f"""
-You are a professional stock analyst. Analyze the following stock data and provide:
-1. overall_score (0-100): Overall investment attractiveness
-2. recommendation: One of ["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"]
-3. Brief reasoning (2-3 sentences)
-
-Stock: {symbol}
-Current Price: ${snapshot_data.get('price', 'N/A')}
-Change %: {snapshot_data.get('change_pct', 'N/A')}%
-RSI: {snapshot_data.get('rsi', 'N/A')}
-MACD: {snapshot_data.get('macd', 'N/A')}
-EMA 20: ${snapshot_data.get('ema_20', 'N/A')}
-EMA 50: ${snapshot_data.get('ema_50', 'N/A')}
-EMA 200: ${snapshot_data.get('ema_200', 'N/A')}
-Upside Potential: {snapshot_data.get('upside_pct', 'N/A')}%
-Analyst Buy %: {snapshot_data.get('analyst_buy_pct', 'N/A')}%
-Sentiment Score: {snapshot_data.get('sentiment_score', 'N/A')}
-
-Respond ONLY in JSON format:
-{{
-  "overall_score": <number 0-100>,
-  "recommendation": "<Strong Buy/Buy/Hold/Sell/Strong Sell>",
-  "reasoning": "<brief explanation>"
-}}
-"""
-                
-                # เรียก API
-                response = model.generate_content(prompt)
-                result_text = response.text.strip()
-                
-                # ลบ markdown code blocks
-                if result_text.startswith("```json"):
-                    result_text = result_text.replace("```json", "").replace("```", "").strip()
-                elif result_text.startswith("```"):
-                    result_text = result_text.replace("```", "").strip()
-                
-                # Parse JSON
-                result = json.loads(result_text)
-                
-                # ✅ สำเร็จ - นับการใช้งาน
-                key_usage_count[key_index] += 1
-                print(f"✅ Successfully used model: {model_name}")
-                
-                return {
-                    "overall_score": int(result.get("overall_score", 50)),
-                    "recommendation": result.get("recommendation", "Hold"),
-                    "reasoning": result.get("reasoning", "")
-                }
-            
-            except json.JSONDecodeError as e:
-                print(f"⚠️ JSON parse error for {symbol} with {model_name} (attempt {attempt + 1}/{max_retries}): {e}")
-                print(f"Response: {result_text[:200] if 'result_text' in locals() else 'N/A'}")
-                
-                if attempt < max_retries - 1:
-                    time.sleep(2)
-                    continue
-                # ถ้า retry หมดแล้ว ให้ลอง model ถัดไป
-                break
-                
-            except Exception as e:
-                error_msg = str(e).lower()
-                
-                # ถ้าเป็น 404 = model ไม่รองรับ → ลอง model ถัดไป
-                if "404" in error_msg or "not found" in error_msg:
-                    print(f"⚠️ Model {model_name} not available, trying next model...")
-                    break  # ออกจาก retry loop ไปลอง model ถัดไป
-                
-                # ถ้าเป็น rate limit
-                if "rate limit" in error_msg or "quota" in error_msg or "429" in error_msg or "resource_exhausted" in error_msg:
-                    print(f"⚠️ Rate limit hit for {symbol} with Key #{key_index + 1}")
-                    mark_key_as_rate_limited(key_index, cooldown_seconds=60)
-                    rotate_to_next_key()
-                    
-                    if attempt < max_retries - 1:
-                        time.sleep(2)
-                        continue
-                else:
-                    print(f"⚠️ Gemini API error for {symbol} with {model_name}: {e}")
-                
-                if attempt < max_retries - 1:
-                    time.sleep(2)
-                    continue
-                # ถ้า retry หมดแล้ว ให้ลอง model ถัดไป
-                break
-    
-    # ลองทุก model แล้วไม่สำเร็จ
-    print(f"❌ Failed to analyze {symbol} after trying all models")
-    return None 
  
 def calculate_technical_indicators(df):
     """คำนวณค่าเทคนิคด้วย TA-Lib"""
@@ -493,9 +234,9 @@ async def fetch_data_waterfall(symbol):
     print(f"❌ All sources failed for {symbol}")
     return None
 
+
 async def main():
     global supabase
-    available_models = get_available_gemini_models()
     
     # ดึงทั้ง symbol และ category
     res = supabase.table("stock_master").select("symbol, category").eq("is_active", True).execute()
@@ -505,7 +246,7 @@ async def main():
         print("📭 No active symbols found in stock_master.")
         return
 
-    print(f"\n🚀 Starting analysis for {len(stocks)} symbols\n")
+    print(f"\n🚀 Starting technical analysis for {len(stocks)} symbols\n")
     
     for idx, stock_data in enumerate(stocks, 1):
         symbol = stock_data['symbol']
@@ -537,7 +278,7 @@ async def main():
         analyst_pct = None if category == 'ETF' else fetch_analyst_data(symbol)
         sentiment = None if category == 'ETF' else fetch_sentiment_score(symbol)
         
-        # ⬇️ แก้ไขตรงนี้: ไม่ใส่ category ใน snapshot_payload
+        # สร้าง snapshot payload
         snapshot_payload = {
             "symbol": symbol,
             "price": data.get("price"),
@@ -562,6 +303,9 @@ async def main():
             try:
                 supabase.table("stock_snapshots").insert(snapshot_payload).execute()
                 print(f"✅ Snapshot saved: {symbol}")
+                print(f"   Price: ${data.get('price'):.2f} | Change: {data.get('change_pct'):.2f}%")
+                if data.get('rsi'):
+                    print(f"   RSI: {data.get('rsi'):.2f} | Upside: {upside_pct}%")
                 break
             except Exception as db_error:
                 print(f"⚠️ Database error (attempt {db_attempt + 1}/{max_db_retries}): {db_error}")
@@ -571,55 +315,13 @@ async def main():
                 else:
                     print(f"❌ Failed to save snapshot for {symbol}")
                     break
-
-        # ⬇️ แก้ไขตรงนี้: เพิ่ม category ชั่วคราวสำหรับส่งให้ AI
-        print(f"🤖 Analyzing {symbol} with Gemini AI...")
-        snapshot_with_category = {**snapshot_payload, "category": category}
-        ai_result = analyze_with_gemini(symbol, snapshot_with_category)
-
-        # --- เพิ่ม Logic Fallback ตรงนี้ ---
-        if not ai_result:
-            print(f"🔄 Gemini failed all attempts. Switching to Groq fallback for {symbol}...")
-            ai_result = analyze_with_groq(symbol, snapshot_with_category)
-        # -------------------------------
-
-        
-        if ai_result:
-            prediction_payload = {
-                "symbol": symbol,
-                "ai_model": "gemini-pro",
-                "overall_score": ai_result["overall_score"],
-                "recommendation": ai_result["recommendation"],
-                "price_at_prediction": data.get("price"),
-                "created_at": datetime.now().isoformat()
-            }
-             
-            for db_attempt in range(max_db_retries):
-                try:
-                    supabase.table("ai_predictions").insert(prediction_payload).execute()
-                    print(f"🎯 AI Prediction: {symbol} | Score: {ai_result['overall_score']}/100 | {ai_result['recommendation']}")
-                    print(f"   Reasoning: {ai_result['reasoning']}")
-                    break
-                except Exception as db_error:
-                    print(f"⚠️ Database error saving prediction (attempt {db_attempt + 1}/{max_db_retries}): {db_error}")
-                    if db_attempt < max_db_retries - 1:
-                        await asyncio.sleep(2)
-                        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-                    else:
-                        print(f"❌ Failed to save AI prediction for {symbol}")
-                        break
-        else:
-            print(f"⚠️ Could not get AI prediction for {symbol}")
         
         await asyncio.sleep(3)
     
-    # แสดงสถิติการใช้งาน API keys
     print(f"\n{'='*60}")
-    print("📊 API Key Usage Statistics:")
-    print(f"{'='*60}")
-    for i, count in key_usage_count.items():
-        print(f"Key #{i + 1}: {count} requests")
+    print("✅ Technical data collection completed!")
     print(f"{'='*60}\n")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
