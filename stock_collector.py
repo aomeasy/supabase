@@ -43,6 +43,56 @@ key_cooldown_until = {i: 0 for i in range(len(GEMINI_API_KEYS))}
  
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+from google import genai # ใช้ SDK ใหม่
+
+def analyze_with_gemini_v2(symbol, snapshot_data, api_key):
+    client = genai.Client(api_key=api_key)
+    
+    # สร้าง Prompt ที่เน้น GARP
+    prompt = f"""
+    Analyze {symbol} using the GARP (Growth at a Reasonable Price) framework.
+    
+    Data:
+    - Price: ${snapshot_data.get('price')}
+    - P/E Ratio: {snapshot_data.get('pe_ratio')}
+    - PEG Ratio: {snapshot_data.get('peg_ratio')} (Target < 1.0 - 1.5)
+    - EPS Growth: {snapshot_data.get('eps_growth_pct')}%
+    - Technical: RSI={snapshot_data.get('rsi')}, Upside={snapshot_data.get('upside_pct')}%
+    
+    Instruction:
+    1. Evaluate if the growth justifies the current valuation (PEG Analysis).
+    2. Provide an overall_score (0-100) and recommendation.
+    
+    Respond ONLY in JSON format:
+    {{
+      "overall_score": <int>,
+      "recommendation": "<Strong Buy/Buy/Hold/Sell>",
+      "reasoning": "<brief GARP-focused explanation>"
+    }}
+    """
+    
+    response = client.models.generate_content(
+        model="gemini-2.0-flash", # ใช้รุ่นล่าสุด
+        contents=prompt
+    )
+    return json.loads(response.text)
+    
+def fetch_fundamental_data(symbol):
+    """ดึงข้อมูล Fundamental สำหรับกลยุทธ์ GARP"""
+    try:
+        stock = yf.Ticker(symbol)
+        info = stock.info
+        
+        return {
+            "pe_ratio": info.get('forwardPE') or info.get('trailingPE'),
+            "peg_ratio": info.get('pegRatio'),
+            "eps_growth_pct": info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None,
+            "market_cap": info.get('marketCap')
+        }
+    except Exception as e:
+        print(f"⚠️ Cannot fetch fundamental data for {symbol}: {e}")
+        return {}
+        
 def analyze_with_groq(symbol, snapshot_data):
     """ฟังก์ชันสำรองใช้ Groq (Llama 3) วิเคราะห์หุ้นเมื่อ Gemini ขัดข้อง"""
     if not GROQ_API_KEY:
