@@ -205,18 +205,58 @@ def calculate_actual_outcome(symbol, prediction_date):
         print(f"⚠️ Error calculating actual outcome: {e}")
         return None
 
+
 def fetch_news_data(symbol):
-    """ดึงข่าวล่าสุดจาก yfinance และคำนวณ sentiment (ปรับปรุงแล้ว)"""
+    """ดึงข่าวล่าสุดจาก Finnhub API และคำนวณ sentiment + แปลภาษาไทย"""
     try:
-        stock = yf.Ticker(symbol)
-        news = stock.news
+        if not FINNHUB_KEY or FINNHUB_KEY == "":
+            print(f"⚠️ FINNHUB_KEY not configured, skipping news for {symbol}")
+            return []
         
-        if not news or len(news) == 0:
+        # 1. กำหนดช่วงเวลา: 7 วันล่าสุด
+        to_date = datetime.now()
+        from_date = to_date - timedelta(days=7)
+        
+        # 2. เตรียม URL และ Parameters
+        url = "https://finnhub.io/api/v1/company-news"
+        params = {
+            "symbol": symbol,
+            "from": from_date.strftime('%Y-%m-%d'),
+            "to": to_date.strftime('%Y-%m-%d'),
+            "token": FINNHUB_KEY
+        }
+        
+        # 3. ยิง Request ไปที่ API
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # 4. ตรวจสอบข้อมูล
+        if not data or not isinstance(data, list):
             print(f"📭 No news available for {symbol}")
             return []
         
-        print(f"📰 Found {len(news)} news articles for {symbol}")
+        print(f"📰 Found {len(data)} news articles for {symbol}")
         
+        # 5. เอาแค่ 10 ข่าวล่าสุด
+        news_list = data[:10]
+        
+        # 6. แปลภาษาไทย
+        try:
+            translator = GoogleTranslator(source='en', target='th')
+            for news in news_list:
+                headline = news.get('headline', '')
+                summary = news.get('summary', '')
+                
+                if headline:
+                    news['headline_th'] = translator.translate(headline)
+                
+                if summary:
+                    news['summary_th'] = translator.translate(summary[:4500])
+        except Exception as trans_error:
+            print(f"⚠️ Translation failed for {symbol}: {trans_error}")
+            # ถ้าแปลไม่ได้ ใช้ภาษาอังกฤษเดิม
+ 
  
 
         positive_keywords = [
@@ -334,72 +374,44 @@ def fetch_news_data(symbol):
             # Valuation & Financials
             'overvalued', 'expensive', 'stretched valuation', 'cash burn', 'margin compression'
         ]
-       
-        
+ 
+        # 8. สร้าง news_records พร้อม sentiment
         news_records = []
-
-        for idx, article in enumerate(news[:10], 1):  # เก็บแค่ 10 ข่าวล่าสุด
-            # ลองหา title จากหลาย key
-            title = (
-                article.get('title') or 
-                article.get('headline') or 
-                article.get('text') or 
-                ''
-            )
+        
+        for idx, news in enumerate(news_list, 1):
+            headline = news.get('headline', '')
             
-            # ลองหา summary จากหลาย key
-            summary = (
-                article.get('summary') or 
-                article.get('description') or 
-                article.get('text') or 
-                ''
-            )
-            
-            # ข้ามถ้าไม่มี title
-            if not title:
-                print(f"⚠️ News #{idx}: No title found, skipping...")
+            if not headline:
+                print(f"⚠️ News #{idx}: No headline found, skipping...")
                 continue
             
-            title_lower = title.lower()
+            headline_lower = headline.lower()
             
             # คำนวณ sentiment
-            pos_count = sum(1 for word in positive_keywords if word in title_lower)
-            neg_count = sum(1 for word in negative_keywords if word in title_lower)
+            pos_count = sum(1 for word in positive_keywords if word in headline_lower)
+            neg_count = sum(1 for word in negative_keywords if word in headline_lower)
             
             if pos_count > 0 or neg_count > 0:
                 sentiment = round((pos_count - neg_count) / max(pos_count + neg_count, 1), 2)
             else:
                 sentiment = 0.0
             
-            # แปลง timestamp
-            pub_time = article.get('providerPublishTime')
-            if pub_time:
-                published_at = datetime.fromtimestamp(pub_time).isoformat()
+            # แปลง timestamp (Finnhub ใช้ Unix timestamp)
+            pub_timestamp = news.get('datetime')
+            if pub_timestamp:
+                published_at = datetime.fromtimestamp(pub_timestamp).isoformat()
             else:
                 published_at = datetime.now().isoformat()
             
-            # ลองหา URL
-            url = (
-                article.get('link') or 
-                article.get('url') or 
-                article.get('canonical_url') or 
-                ''
-            )
-            
-            # ลองหา source
-            source = (
-                article.get('publisher') or 
-                article.get('source') or 
-                'Unknown'
-            )
-            
             news_record = {
                 "symbol": symbol,
-                "title": title[:500],  # จำกัดความยาว
-                "summary": summary[:500] if summary else None,
-                "url": url,
+                "title": headline[:500],
+                "title_th": news.get('headline_th', '')[:500] if news.get('headline_th') else None,
+                "summary": news.get('summary', '')[:500] if news.get('summary') else None,
+                "summary_th": news.get('summary_th', '')[:500] if news.get('summary_th') else None,
+                "url": news.get('url', ''),
                 "published_at": published_at,
-                "source": source,
+                "source": news.get('source', 'Unknown'),
                 "sentiment_score": sentiment
             }
             
@@ -407,18 +419,18 @@ def fetch_news_data(symbol):
             
             # Debug: แสดงข้อมูลข่าวแรก
             if idx == 1:
-                print(f"   Sample news: {title[:50]}...")
-                print(f"   Sentiment: {sentiment} | Source: {source}")
+                print(f"   Sample: {headline[:50]}...")
+                print(f"   Thai: {news.get('headline_th', '')[:50]}...")
+                print(f"   Sentiment: {sentiment} | Source: {news.get('source')}")
         
         return news_records
         
     except Exception as e:
         print(f"⚠️ Cannot fetch news for {symbol}: {e}")
         import traceback
-        traceback.print_exc()  # แสดง error แบบละเอียด
+        traceback.print_exc()
         return []
-        
- 
+         
     
 def fetch_fundamental_data(symbol):
     """ดึงข้อมูล Fundamental สำหรับกลยุทธ์ GARP"""
