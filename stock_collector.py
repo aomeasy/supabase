@@ -1033,14 +1033,13 @@ def calculate_news_sentiment_advanced(headline, summary=''):
     
     return round(max(-1, min(1, normalized)), 2)
 
- 
 
 async def main():
     global supabase
     
-    # ดึงข้อมูลหุ้นทั้งหมด (เพิ่ม market_cap)
+    # ดึงข้อมูลหุ้นทั้งหมด (ไม่ดึง market_cap จาก DB)
     res = supabase.table("stock_master")\
-        .select("symbol, category, market_cap")\
+        .select("symbol, category")\
         .eq("is_active", True)\
         .execute()
     stocks = res.data
@@ -1065,13 +1064,9 @@ async def main():
     for idx, stock_data in enumerate(stocks, 1):
         symbol = stock_data['symbol']
         category = stock_data.get('category', 'Core')
-        market_cap = stock_data.get('market_cap')  # ← เพิ่มตัวนี้
         
         print(f"\n{'='*60}")
         print(f"[{idx}/{len(stocks)}] Processing: {symbol} ({category})")
-        if market_cap:
-            market_cap_str = f"${market_cap/1e9:.1f}B" if market_cap >= 1e9 else f"${market_cap/1e6:.1f}M"
-            print(f"Market Cap: {market_cap_str}")
         print(f"{'='*60}")
         
         # ============================================
@@ -1084,6 +1079,19 @@ async def main():
             stats['failed'] += 1
             await asyncio.sleep(5)
             continue
+        
+        # 🆕 ดึง market_cap จาก yfinance (ไม่ใช่จาก DB)
+        market_cap = None
+        try:
+            if category != 'ETF':
+                stock = yf.Ticker(symbol)
+                market_cap = stock.info.get('marketCap')
+                
+                if market_cap:
+                    market_cap_str = f"${market_cap/1e9:.1f}B" if market_cap >= 1e9 else f"${market_cap/1e6:.1f}M"
+                    print(f"Market Cap: {market_cap_str}")
+        except Exception as mc_error:
+            print(f"⚠️ Could not fetch market cap: {mc_error}")
         
         if not data.get("ema_200"):
             print(f"⚠️ {symbol}: No EMA 200 data available")
@@ -1154,7 +1162,7 @@ async def main():
         # ============================================
         # STEP 4: ดึงและบันทึกข่าว (เหมือนเดิม + ปรับ Sentiment)
         # ============================================
-        news_sentiment_advanced = None  # ← ตัวแปรใหม่สำหรับ sentiment แบบละเอียด
+        news_sentiment_advanced = None
         
         if category != 'ETF':
             print(f"📰 Fetching news for {symbol}...")
@@ -1164,9 +1172,8 @@ async def main():
             
             if news_records:
                 try:
-                    # บันทึกข่าวทีละรายการ (เหมือนเดิม)
                     saved_count = 0
-                    sentiment_scores = []  # ← เก็บ sentiment ของแต่ละข่าว
+                    sentiment_scores = []
                     
                     for news in news_records:
                         try:
@@ -1182,13 +1189,12 @@ async def main():
                                 sentiment_scores.append(adv_sentiment)
                             
                         except Exception as dup_error:
-                            # ข้าม error ถ้าข่าวซ้ำ (เหมือนเดิม)
                             if "duplicate" not in str(dup_error).lower():
                                 print(f"⚠️ News error: {dup_error}")
                     
                     print(f"✅ Saved {saved_count}/{len(news_records)} news for {symbol}")
                     
-                    # 🆕 คำนวณ Sentiment เฉลี่ย (ถ้ามีข้อมูล)
+                    # คำนวณ Sentiment เฉลี่ย
                     if sentiment_scores:
                         news_sentiment_advanced = round(sum(sentiment_scores) / len(sentiment_scores), 2)
                         print(f"   Advanced Sentiment: {news_sentiment_advanced:.2f}")
@@ -1199,7 +1205,7 @@ async def main():
                 print(f"📭 No valid news found for {symbol}")
         
         # ============================================
-        # STEP 5: คำนวณ AI Prediction (ปรับใหม่)
+        # STEP 5: คำนวณ AI Prediction
         # ============================================
         print(f"🤖 Calculating AI prediction for {symbol}...")
         
@@ -1215,43 +1221,38 @@ async def main():
             'ema_20': data.get('ema_20'),
             'ema_50': data.get('ema_50'),
             'ema_200': data.get('ema_200'),
-            'bb_upper': data.get('bb_upper'),      # ← เพิ่มสำหรับ Risk Score
-            'bb_lower': data.get('bb_lower'),      # ← เพิ่มสำหรับ Risk Score
+            'bb_upper': data.get('bb_upper'),
+            'bb_lower': data.get('bb_lower'),
             'upside_pct': upside_pct,
             'analyst_buy_pct': analyst_pct
         }
         
-        # 🆕 ใช้ Sentiment แบบใหม่ถ้ามี, ไม่งั้นใช้แบบเก่า
+        # ใช้ Sentiment แบบใหม่ถ้ามี
         final_sentiment = news_sentiment_advanced if news_sentiment_advanced is not None else sentiment
         
-        # 🆕 คำนวณ Overall Score (ใช้ฟังก์ชันใหม่ถ้ามี, ไม่งั้นใช้เดิม)
+        # คำนวณ Overall Score (ใช้ฟังก์ชันใหม่ถ้ามี)
         if 'calculate_overall_score_with_risk' in globals():
-            # ใช้เวอร์ชันใหม่ที่มี Risk Management
             overall_score = calculate_overall_score_with_risk(
                 symbol=symbol,
                 tech_data=tech_data_full,
                 fundamental_data=fundamental_data,
                 news_sentiment=final_sentiment,
                 category=category,
-                market_cap=market_cap
+                market_cap=market_cap  # ← ใช้ market_cap ที่ดึงมา
             )
-            
-            # คำนวณ Risk Score
             risk_score = calculate_risk_score(tech_data_full, fundamental_data, market_cap)
-            
         else:
-            # ใช้เวอร์ชันเดิม (backward compatible)
+            # ใช้เวอร์ชันเดิม
             overall_score = calculate_overall_score(
                 symbol=symbol,
                 tech_data=tech_data_full,
                 fundamental_data=fundamental_data,
                 news_sentiment=final_sentiment
             )
-            risk_score = 0  # ไม่มี risk score
+            risk_score = 0
         
-        # 🆕 สร้างคำแนะนำ (ใช้ฟังก์ชันใหม่ถ้ามี, ไม่งั้นใช้เดิม)
+        # สร้างคำแนะนำ
         if 'generate_recommendation_advanced' in globals():
-            # ใช้เวอร์ชันใหม่
             recommendation_data = generate_recommendation_advanced(
                 overall_score=overall_score,
                 price=data.get('price'),
@@ -1265,9 +1266,8 @@ async def main():
             price_target = recommendation_data['price_target']
             confidence = recommendation_data.get('confidence', 'Medium')
             time_horizon = recommendation_data.get('time_horizon', '6 months')
-            
         else:
-            # ใช้เวอร์ชันเดิม (backward compatible)
+            # ใช้เวอร์ชันเดิม
             recommendation, reason, price_target = generate_recommendation(
                 overall_score=overall_score,
                 price=data.get('price'),
@@ -1288,7 +1288,7 @@ async def main():
             "actual_outcome": None
         }
         
-        # 🆕 เพิ่มฟิลด์ใหม่ถ้ามี
+        # เพิ่มฟิลด์ใหม่ถ้ามี
         if risk_score > 0:
             prediction_payload["risk_score"] = risk_score
         if confidence:
@@ -1301,7 +1301,6 @@ async def main():
         try:
             supabase.table("ai_predictions").insert(prediction_payload).execute()
             
-            # 🆕 แสดงผลแบบละเอียดขึ้น
             print(f"✅ AI Prediction saved: {symbol}")
             print(f"   Score: {overall_score}/100 | {recommendation}")
             
@@ -1336,7 +1335,6 @@ async def main():
             print(f"⚠️ Failed to save prediction for {symbol}: {pred_error}")
             stats['failed'] += 1
         
-        # หน่วงเวลาก่อนประมวลผลหุ้นถัดไป
         await asyncio.sleep(3)
     
     # ============================================
@@ -1360,3 +1358,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+ 
