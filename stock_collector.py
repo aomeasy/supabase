@@ -1034,10 +1034,11 @@ def calculate_news_sentiment_advanced(headline, summary=''):
     return round(max(-1, min(1, normalized)), 2)
 
 
+
 async def main():
     global supabase
     
-    # ดึงข้อมูลหุ้นทั้งหมด (ไม่ดึง market_cap จาก DB)
+    # ดึงข้อมูลหุ้นทั้งหมด
     res = supabase.table("stock_master")\
         .select("symbol, category")\
         .eq("is_active", True)\
@@ -1058,7 +1059,10 @@ async def main():
         'strong_buy': 0,
         'buy': 0,
         'hold': 0,
-        'sell': 0
+        'sell': 0,
+        'high_confidence': 0,
+        'medium_confidence': 0,
+        'low_confidence': 0
     }
     
     for idx, stock_data in enumerate(stocks, 1):
@@ -1070,7 +1074,7 @@ async def main():
         print(f"{'='*60}")
         
         # ============================================
-        # STEP 1: ดึงข้อมูล Technical (เหมือนเดิม)
+        # STEP 1: ดึงข้อมูล Technical
         # ============================================
         data = await fetch_data_waterfall(symbol)
         
@@ -1080,39 +1084,53 @@ async def main():
             await asyncio.sleep(5)
             continue
         
-        # 🆕 ดึง market_cap จาก yfinance (ไม่ใช่จาก DB)
-        market_cap = None
-        try:
-            if category != 'ETF':
-                stock = yf.Ticker(symbol)
-                market_cap = stock.info.get('marketCap')
-                
-                if market_cap:
-                    market_cap_str = f"${market_cap/1e9:.1f}B" if market_cap >= 1e9 else f"${market_cap/1e6:.1f}M"
-                    print(f"Market Cap: {market_cap_str}")
-        except Exception as mc_error:
-            print(f"⚠️ Could not fetch market cap: {mc_error}")
-        
         if not data.get("ema_200"):
             print(f"⚠️ {symbol}: No EMA 200 data available")
         
         # ============================================
-        # STEP 2: คำนวณ Metrics (เหมือนเดิม)
+        # STEP 2: ดึง Market Cap + Fundamental Data
         # ============================================
         print(f"📊 Calculating metrics for {symbol}...")
         
+        market_cap = None
+        fundamental_data = None
+        
+        if category != 'ETF':
+            try:
+                stock = yf.Ticker(symbol)
+                info = stock.info
+                
+                # ดึง market_cap
+                market_cap = info.get('marketCap')
+                
+                # ดึง fundamental data
+                fundamental_data = {
+                    "pe_ratio": info.get('forwardPE') or info.get('trailingPE'),
+                    "peg_ratio": info.get('pegRatio'),
+                    "eps_growth_pct": info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None,
+                    "market_cap": market_cap
+                }
+                
+                if market_cap:
+                    market_cap_str = f"${market_cap/1e9:.1f}B" if market_cap >= 1e9 else f"${market_cap/1e6:.1f}M"
+                    print(f"   Market Cap: {market_cap_str}")
+                
+            except Exception as yf_error:
+                print(f"⚠️ Could not fetch yfinance data: {yf_error}")
+        
+        # คำนวณ Upside
         upside_pct = calculate_upside_pct(
             data.get("price"), 
             data.get("ema_200"),
             data.get("ema_50")
         )
         
-        # ข้าม analyst/sentiment สำหรับ ETF (เหมือนเดิม)
+        # ข้าม analyst/sentiment สำหรับ ETF
         analyst_pct = None if category == 'ETF' else fetch_analyst_data(symbol)
         sentiment = None if category == 'ETF' else fetch_sentiment_score(symbol)
         
         # ============================================
-        # STEP 3: บันทึก Snapshot (เหมือนเดิม)
+        # STEP 3: บันทึก Snapshot
         # ============================================
         snapshot_payload = {
             "symbol": symbol,
@@ -1132,7 +1150,14 @@ async def main():
             "recorded_at": datetime.now().isoformat()
         }
         
-        # บันทึก snapshot (เหมือนเดิม)
+        # เพิ่ม fundamental data ใน snapshot
+        if fundamental_data:
+            snapshot_payload["pe_ratio"] = fundamental_data.get("pe_ratio")
+            snapshot_payload["peg_ratio"] = fundamental_data.get("peg_ratio")
+            snapshot_payload["eps_growth_pct"] = fundamental_data.get("eps_growth_pct")
+            snapshot_payload["market_cap"] = market_cap
+        
+        # บันทึก snapshot
         max_db_retries = 3
         snapshot_saved = False
         
@@ -1160,7 +1185,7 @@ async def main():
             continue
         
         # ============================================
-        # STEP 4: ดึงและบันทึกข่าว (เหมือนเดิม + ปรับ Sentiment)
+        # STEP 4: ดึงและบันทึกข่าว
         # ============================================
         news_sentiment_advanced = None
         
@@ -1180,7 +1205,7 @@ async def main():
                             supabase.table("stock_news").insert(news).execute()
                             saved_count += 1
                             
-                            # 🆕 คำนวณ Sentiment แบบใหม่ (ถ้ามีฟังก์ชัน)
+                            # คำนวณ Sentiment แบบใหม่ (ถ้ามีฟังก์ชัน)
                             if 'calculate_news_sentiment_advanced' in globals():
                                 adv_sentiment = calculate_news_sentiment_advanced(
                                     news.get('title', ''),
@@ -1194,7 +1219,6 @@ async def main():
                     
                     print(f"✅ Saved {saved_count}/{len(news_records)} news for {symbol}")
                     
-                    # คำนวณ Sentiment เฉลี่ย
                     if sentiment_scores:
                         news_sentiment_advanced = round(sum(sentiment_scores) / len(sentiment_scores), 2)
                         print(f"   Advanced Sentiment: {news_sentiment_advanced:.2f}")
@@ -1208,9 +1232,6 @@ async def main():
         # STEP 5: คำนวณ AI Prediction
         # ============================================
         print(f"🤖 Calculating AI prediction for {symbol}...")
-        
-        # ดึง fundamental data (เหมือนเดิม)
-        fundamental_data = None if category == 'ETF' else fetch_fundamental_data(symbol)
         
         # เตรียมข้อมูล Technical
         tech_data_full = {
@@ -1230,15 +1251,16 @@ async def main():
         # ใช้ Sentiment แบบใหม่ถ้ามี
         final_sentiment = news_sentiment_advanced if news_sentiment_advanced is not None else sentiment
         
-        # คำนวณ Overall Score (ใช้ฟังก์ชันใหม่ถ้ามี)
+        # คำนวณ Overall Score
         if 'calculate_overall_score_with_risk' in globals():
+            # ใช้เวอร์ชันใหม่ที่มี Risk Management
             overall_score = calculate_overall_score_with_risk(
                 symbol=symbol,
                 tech_data=tech_data_full,
                 fundamental_data=fundamental_data,
                 news_sentiment=final_sentiment,
                 category=category,
-                market_cap=market_cap  # ← ใช้ market_cap ที่ดึงมา
+                market_cap=market_cap
             )
             risk_score = calculate_risk_score(tech_data_full, fundamental_data, market_cap)
         else:
@@ -1253,6 +1275,7 @@ async def main():
         
         # สร้างคำแนะนำ
         if 'generate_recommendation_advanced' in globals():
+            # ใช้เวอร์ชันใหม่
             recommendation_data = generate_recommendation_advanced(
                 overall_score=overall_score,
                 price=data.get('price'),
@@ -1277,7 +1300,7 @@ async def main():
             time_horizon = None
         
         # ============================================
-        # STEP 6: บันทึก AI Prediction
+        # STEP 6: บันทึก AI Prediction (พร้อมฟิลด์ใหม่)
         # ============================================
         prediction_payload = {
             "symbol": symbol,
@@ -1288,37 +1311,49 @@ async def main():
             "actual_outcome": None
         }
         
-        # เพิ่มฟิลด์ใหม่ถ้ามี
+        # 🆕 เพิ่มฟิลด์ใหม่ (ตอนนี้ใช้ได้แล้ว!)
         if risk_score > 0:
             prediction_payload["risk_score"] = risk_score
+        
         if confidence:
             prediction_payload["confidence"] = confidence
+        
         if price_target:
             prediction_payload["price_target"] = price_target
+        
         if time_horizon:
             prediction_payload["time_horizon"] = time_horizon
         
         try:
             supabase.table("ai_predictions").insert(prediction_payload).execute()
             
+            # แสดงผลแบบละเอียด
             print(f"✅ AI Prediction saved: {symbol}")
-            print(f"   Score: {overall_score}/100 | {recommendation}")
+            print(f"   📊 Score: {overall_score}/100 | {recommendation}")
             
             if risk_score > 0:
                 risk_level = 'High' if risk_score >= 60 else 'Medium' if risk_score >= 30 else 'Low'
-                print(f"   Risk: {risk_score}/100 ({risk_level})")
+                print(f"   💎 Risk: {risk_score}/100 ({risk_level})")
             
             if confidence:
-                print(f"   Confidence: {confidence}")
+                print(f"   🎯 Confidence: {confidence}")
+                
+                # นับสถิติ confidence
+                if confidence == 'High':
+                    stats['high_confidence'] += 1
+                elif confidence == 'Medium':
+                    stats['medium_confidence'] += 1
+                elif confidence == 'Low':
+                    stats['low_confidence'] += 1
             
-            print(f"   Reason: {reason}")
+            print(f"   📝 Reason: {reason}")
             
             if price_target:
                 upside_to_target = ((price_target - data.get('price')) / data.get('price')) * 100
-                print(f"   Target: ${price_target:.2f} (+{upside_to_target:.1f}%)")
+                print(f"   🎯 Target: ${price_target:.2f} (+{upside_to_target:.1f}%)")
             
             if time_horizon:
-                print(f"   Horizon: {time_horizon}")
+                print(f"   ⏰ Horizon: {time_horizon}")
             
             # อัพเดตสถิติ
             stats['success'] += 1
@@ -1335,6 +1370,7 @@ async def main():
             print(f"⚠️ Failed to save prediction for {symbol}: {pred_error}")
             stats['failed'] += 1
         
+        # หน่วงเวลาก่อนประมวลผลหุ้นถัดไป
         await asyncio.sleep(3)
     
     # ============================================
@@ -1347,15 +1383,28 @@ async def main():
     print(f"   Total Processed: {len(stocks)}")
     print(f"   ✅ Success: {stats['success']}")
     print(f"   ❌ Failed: {stats['failed']}")
+    
     print(f"\n📈 Recommendations Breakdown:")
     print(f"   🟢 Strong Buy: {stats['strong_buy']}")
     print(f"   🟢 Buy: {stats['buy']}")
     print(f"   🟡 Hold: {stats['hold']}")
     print(f"   🔴 Sell: {stats['sell']}")
+    
+    # แสดงสถิติ Confidence
+    if stats['high_confidence'] + stats['medium_confidence'] + stats['low_confidence'] > 0:
+        print(f"\n🎯 Confidence Distribution:")
+        print(f"   🔥 High Confidence: {stats['high_confidence']}")
+        print(f"   📊 Medium Confidence: {stats['medium_confidence']}")
+        print(f"   ⚠️ Low Confidence: {stats['low_confidence']}")
+    
+    # คำนวณ success rate
+    if len(stocks) > 0:
+        success_rate = (stats['success'] / len(stocks)) * 100
+        print(f"\n✨ Success Rate: {success_rate:.1f}%")
+    
     print(f"\n⏰ Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
- 
+    asyncio.run(main()) 
