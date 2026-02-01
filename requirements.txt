@@ -8,3 +8,4 @@ google-generativeai
 groq>=0.4.0
 deep-translator==1.11.4 
 numpy
+python-telegram-bot[all]==21.0
