@@ -1,0 +1,64 @@
+name: Telegram Bot Service
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'telegram_bot.py'
+      - '.github/workflows/telegram_bot.yml'
+  workflow_dispatch:  # รัน manually
+  schedule:
+    # Keep-alive: รันทุก 5 ชั่วโมงเพื่อรีสตาร์ท Bot
+    - cron: '0 */5 * * *'
+
+jobs:
+  run-telegram-bot:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v3
+    
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+    
+    - name: 📚 Install dependencies
+      run: |
+        echo "📚 Installing dependencies..."
+        pip install --upgrade pip
+        pip install python-telegram-bot[all]==21.0 supabase requests
+        echo "✅ Dependencies installed"
+    
+    - name: 🤖 Start Telegram Bot
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      timeout-minutes: 300  # รันได้สูงสุด 5 ชั่วโมง (GitHub Actions limit = 6 hrs)
+      run: |
+        echo "🤖 Starting Telegram Bot..."
+        echo "Bot will run for up to 5 hours"
+        python Telegram_bot.py &
+        BOT_PID=$!
+        echo "Bot PID: $BOT_PID"
+        
+        # รอ 5 ชั่วโมง (18000 วินาที)
+        sleep 18000
+        
+        # หยุด Bot อย่างสง่างาม
+        echo "⏰ Time limit reached, stopping bot..."
+        kill $BOT_PID 2>/dev/null || true
+        echo "✅ Bot stopped gracefully"
+    
+    - name: ❌ Notify on Failure
+      if: failure()
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+          -d "chat_id=${TELEGRAM_CHAT_ID}" \
+          -d "text=❌ Telegram Bot Crashed!%0A%0AWorkflow: ${GITHUB_WORKFLOW}%0ARun: ${GITHUB_RUN_NUMBER}%0A%0ACheck logs: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
