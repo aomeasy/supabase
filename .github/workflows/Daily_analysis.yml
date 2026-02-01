@@ -1,0 +1,75 @@
+name: Daily Stock Analysis
+
+on:
+  schedule:
+    # รันทุกวัน 8:00 AM UTC (15:00 น. เวลาไทย)
+    - cron: '0 8 * * *'
+  workflow_dispatch:  # สามารถรัน manually ได้
+
+jobs:
+  analyze-stocks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # ป้องกันรันค้าง
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v3
+    
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'  # Cache dependencies
+    
+    - name: 📦 Install TA-Lib
+      run: |
+        echo "📦 Installing TA-Lib..."
+        wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+        tar -xzf ta-lib-0.4.0-src.tar.gz
+        cd ta-lib/
+        ./configure --prefix=/usr
+        make
+        sudo make install
+        cd ..
+        rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+        echo "✅ TA-Lib installed"
+    
+    - name: 📚 Install Python dependencies
+      run: |
+        echo "📚 Installing Python packages..."
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        echo "✅ Dependencies installed"
+    
+    - name: 📊 Run Stock Analysis
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        TWELVE_DATA_KEY: ${{ secrets.TWELVE_DATA_KEY }}
+        FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
+      run: |
+        echo "🚀 Starting stock analysis..."
+        python stock_collector.py
+        echo "✅ Stock analysis completed"
+    
+    - name: 📨 Send Telegram Summary
+      if: success()  # รันเฉพาะตอนวิเคราะห์สำเร็จ
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        echo "📨 Sending daily summary to Telegram..."
+        python Send_daily_summary.py
+        echo "✅ Summary sent"
+    
+    - name: ❌ Notify on Failure
+      if: failure()
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+          -d "chat_id=${TELEGRAM_CHAT_ID}" \
+          -d "text=❌ Stock Analysis Failed!%0A%0AWorkflow: ${GITHUB_WORKFLOW}%0ARun: ${GITHUB_RUN_NUMBER}%0A%0ACheck logs: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
