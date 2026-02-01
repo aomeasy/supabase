@@ -1,0 +1,52 @@
+name: StockAI Data Collector
+
+on:
+  schedule:
+    # 1. ก่อนตลาดเปิด - วิเคราะห์ข่าว Pre-market
+    - cron: '0 14 * * 1-5'     # 21:00 น. ไทย (ก่อนเปิด 21:30)
+    
+    # 2. เปิดตลาดแล้ว 30 นาที - จับ momentum เริ่มต้น
+    - cron: '0 15 * * 1-5'     # 22:00 น. ไทย
+    
+    # 3. กลางวัน US (เที่ยงคืนไทย) - ตรวจสอบ intraday trends
+    - cron: '30 17 * * 1-5'    # 00:30 น. ไทย
+    
+    # 4. ก่อนปิดตลาด - เตรียมปิดสถานะ
+    - cron: '30 20 * * 2-6'    # 03:30 น. ไทย (วันถัดไป)
+    
+    # 5. หลังปิดตลาด - สรุปผลวัน + After-hours
+    - cron: '30 0 * * 2-6'     # 07:30 น. ไทย (วันถัดไป)
+     
+  workflow_dispatch: # ช่วยให้คุณสามารถกดปุ่มรันด้วยตัวเองได้ตลอดเวลา
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Scraper Script
+        env:
+          # ดึงค่าจาก GitHub Secrets เพื่อความปลอดภัยสูงสุด
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TWELVE_DATA_KEY: ${{ secrets.TWELVE_DATA_KEY }}
+          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
+          GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+        run: python stock_collector.py # เปลี่ยนชื่อไฟล์ให้ตรงกับไฟล์ Python ของคุณ
