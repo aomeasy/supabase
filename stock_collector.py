@@ -14,7 +14,9 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_KEY")
 FINNHUB_KEY = os.getenv("FINNHUB_KEY") 
- 
+
+TELEGRAM_BOT_TOKEN = "8473805508:AAE2w9F1n3Va5TO53rhdqs7ZbOr2VM8IwMAd"
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # ต้องตั้งค่า Chat ID ใน environment
 
 # Debug
 if FINNHUB_KEY:
@@ -1033,6 +1035,71 @@ def calculate_news_sentiment_advanced(headline, summary=''):
     
     return round(max(-1, min(1, normalized)), 2)
 
+async def send_telegram_message(message):
+    """ส่งข้อความไปที่ Telegram"""
+    if not TELEGRAM_CHAT_ID:
+        print("⚠️ TELEGRAM_CHAT_ID not configured, skipping notification")
+        return False
+    
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        
+        print("✅ Telegram notification sent")
+        return True
+        
+    except Exception as e:
+        print(f"⚠️ Failed to send Telegram: {e}")
+        return False
+
+
+def format_telegram_summary(stats, total_stocks, start_time):
+    """สร้างข้อความสรุปสำหรับ Telegram"""
+    
+    duration = datetime.now() - start_time
+    duration_str = str(duration).split('.')[0]  # ตัด microseconds
+    
+    message = f"""
+🤖 <b>Stock Analysis Completed</b>
+
+📊 <b>Summary:</b>
+- Total: {total_stocks} stocks
+- ✅ Success: {stats['success']}
+- ❌ Failed: {stats['failed']}
+- ⏱ Duration: {duration_str}
+
+📈 <b>Recommendations:</b>
+- 🟢 Strong Buy: {stats['strong_buy']}
+- 🟢 Buy: {stats['buy']}
+- 🟡 Hold: {stats['hold']}
+- 🔴 Sell: {stats['sell']}
+"""
+    
+    # เพิ่ม Confidence ถ้ามี
+    if stats['high_confidence'] + stats['medium_confidence'] + stats['low_confidence'] > 0:
+        message += f"""
+🎯 <b>Confidence:</b>
+- 🔥 High: {stats['high_confidence']}
+- 📊 Medium: {stats['medium_confidence']}
+- ⚠️ Low: {stats['low_confidence']}
+"""
+    
+    # Success Rate
+    if total_stocks > 0:
+        success_rate = (stats['success'] / total_stocks) * 100
+        message += f"\n✨ <b>Success Rate:</b> {success_rate:.1f}%"
+    
+    message += f"\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    return message
+
 
 
 async def main():
@@ -1048,6 +1115,16 @@ async def main():
     if not stocks:
         print("📭 No active symbols found in stock_master.")
         return
+
+    # ✅ เพิ่ม: บันทึกเวลาเริ่มต้น
+    start_time = datetime.now()
+    
+    # ✅ เพิ่ม: ส่ง notification เริ่มต้น
+    await send_telegram_message(
+        f"🚀 <b>Stock Analysis Started</b>\n\n"
+        f"📊 Processing {len(stocks)} symbols\n"
+        f"⏰ {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
     print(f"\n🚀 Starting technical analysis for {len(stocks)} symbols")
     print(f"📅 Analysis time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -1365,10 +1442,32 @@ async def main():
                 stats['hold'] += 1
             elif recommendation in ['Sell', 'Strong Sell']:
                 stats['sell'] += 1
+            
+            # ✅ เพิ่ม: แจ้งเตือน Strong Buy ที่มี High Confidence
+            if recommendation == 'Strong Buy' and confidence == 'High':
+                await send_telegram_message(
+                    f"🔥 <b>Strong Buy Alert!</b>\n\n"
+                    f"📌 {symbol} ({category})\n"
+                    f"💰 Price: ${data.get('price'):.2f}\n"
+                    f"📊 Score: {overall_score}/100\n"
+                    f"🎯 Target: ${price_target:.2f} (+{upside_to_target:.1f}%)\n"
+                    f"💎 Risk: {risk_score}/100\n"
+                    f"📝 {reason}"
+                )
                 
         except Exception as pred_error:
             print(f"⚠️ Failed to save prediction for {symbol}: {pred_error}")
             stats['failed'] += 1
+        
+        # ✅ เพิ่ม: ส่ง progress update ทุกๆ 10 หุ้น
+        if idx % 10 == 0:
+            progress = (idx / len(stocks)) * 100
+            await send_telegram_message(
+                f"📊 <b>Progress Update</b>\n\n"
+                f"✅ Completed: {idx}/{len(stocks)} ({progress:.1f}%)\n"
+                f"🟢 Success: {stats['success']}\n"
+                f"❌ Failed: {stats['failed']}"
+            )
         
         # หน่วงเวลาก่อนประมวลผลหุ้นถัดไป
         await asyncio.sleep(3)
@@ -1404,7 +1503,12 @@ async def main():
     
     print(f"\n⏰ Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*60}\n")
+    
+    # ✅ เพิ่ม: ส่งสรุปผลสุดท้าย
+    summary_message = format_telegram_summary(stats, len(stocks), start_time)
+    await send_telegram_message(summary_message)
 
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
+  
