@@ -1100,6 +1100,292 @@ def format_telegram_summary(stats, total_stocks, start_time):
     
     return message
 
+def get_current_session():
+    """ระบุช่วงเวลาการซื้อขาย"""
+    now_utc = datetime.utcnow()
+    hour_utc = now_utc.hour
+    
+    # UTC Time:
+    # 14:00-14:30 = Pre-market (21:00-21:30 น.ไทย)
+    # 14:30-21:00 = Market Hours (21:30-04:00 น.ไทย)
+    # 21:00-00:00 = After Hours (04:00-07:00 น.ไทย)
+    # 00:00-14:00 = After Close (07:00-21:00 น.ไทย)
+    
+    if 14 <= hour_utc < 15:
+        return "pre_market", "🌅 ก่อนเปิดตลาด"
+    elif 15 <= hour_utc < 21:
+        return "market_hours", "📊 ช่วงเปิดตลาด"
+    elif 21 <= hour_utc < 24:
+        return "after_hours", "🌙 หลังปิดตลาด"
+    else:
+        return "after_close", "☀️ สรุปตลาดเมื่อคืน"
+
+
+def get_market_indices_simple():
+    """ดึงข้อมูล SPY และ QQQ อย่างง่าย"""
+    try:
+        indices = {'SPY': 0, 'QQQ': 0}
+        
+        for symbol in ['SPY', 'QQQ']:
+            snapshot = supabase.table("stock_snapshots")\
+                .select("change_pct")\
+                .eq("symbol", symbol)\
+                .order("recorded_at", desc=True)\
+                .limit(1)\
+                .execute()
+            
+            if snapshot.data:
+                indices[symbol] = snapshot.data[0]['change_pct']
+        
+        return indices
+    except:
+        return {'SPY': 0, 'QQQ': 0}
+
+
+def get_opportunities_by_type(session_type):
+    """
+    หาโอกาสตามประเภทช่วงเวลา
+    
+    - Pre-market: โอกาส gap down
+    - Market Hours: momentum + oversold
+    - After Hours: สรุปวัน + setup พรุ่งนี้
+    - After Close: โอกาส DCA คุณภาพดี
+    """
+    try:
+        # เวลาล่าสุด (10 นาทีที่แล้ว)
+        cutoff_time = (datetime.now() - timedelta(minutes=10)).isoformat()
+        
+        # ดึง snapshot + prediction ล่าสุด
+        snapshots = supabase.table("stock_snapshots")\
+            .select("*")\
+            .gte("recorded_at", cutoff_time)\
+            .execute()
+        
+        predictions = supabase.table("ai_predictions")\
+            .select("*")\
+            .gte("created_at", cutoff_time)\
+            .execute()
+        
+        if not snapshots.data:
+            return []
+        
+        pred_dict = {p['symbol']: p for p in (predictions.data or [])}
+        opportunities = []
+        
+        for snap in snapshots.data:
+            symbol = snap['symbol']
+            pred = pred_dict.get(symbol, {})
+            
+            change_pct = snap.get('change_pct', 0)
+            price = snap.get('price')
+            ema_20 = snap.get('ema_20')
+            rsi = snap.get('rsi')
+            
+            overall_score = pred.get('overall_score', 0)
+            confidence = pred.get('confidence', '')
+            recommendation = pred.get('recommendation', '')
+            
+            # กรองตามช่วงเวลา
+            is_opportunity = False
+            alert_type = ""
+            
+            if session_type == "pre_market":
+                # Pre-market: Gap down ≥ 3% + Score ดี
+                if change_pct <= -3 and overall_score >= 65:
+                    is_opportunity = True
+                    alert_type = "Gap Down"
+                    
+            elif session_type == "market_hours":
+                # Market Hours: ลง ≥ 2% + Oversold
+                if change_pct <= -2 and rsi and rsi < 40:
+                    is_opportunity = True
+                    alert_type = "Intraday Dip"
+                    
+            elif session_type == "after_hours":
+                # After Hours: ลงแรง + คุณภาพดี
+                if change_pct <= -2.5 and overall_score >= 70:
+                    is_opportunity = True
+                    alert_type = "After-Hours Drop"
+                    
+            else:  # after_close
+                # หลังปิดตลาด: DCA คุณภาพสูง
+                if (change_pct <= -2 and 
+                    overall_score >= 70 and 
+                    price and ema_20 and price < ema_20 and
+                    confidence in ['High', 'Medium']):
+                    is_opportunity = True
+                    alert_type = "DCA Setup"
+            
+            if is_opportunity:
+                below_ma_pct = None
+                if price and ema_20:
+                    below_ma_pct = ((ema_20 - price) / price) * 100
+                
+                opportunities.append({
+                    'symbol': symbol,
+                    'price': price,
+                    'change_pct': change_pct,
+                    'overall_score': overall_score,
+                    'confidence': confidence,
+                    'recommendation': recommendation,
+                    'below_ma_pct': below_ma_pct,
+                    'rsi': rsi,
+                    'price_target': pred.get('price_target'),
+                    'risk_score': pred.get('risk_score', 0),
+                    'alert_type': alert_type
+                })
+        
+        # เรียงตาม change_pct (ลงแรงสุดก่อน)
+        opportunities.sort(key=lambda x: x['change_pct'])
+        return opportunities[:5]
+        
+    except Exception as e:
+        print(f"⚠️ Error finding opportunities: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+
+def format_alert_by_session(opportunities, market_data, session_type, session_name):
+    """สร้างข้อความตามช่วงเวลา"""
+    
+    now = datetime.now()
+    
+    # ถ้าไม่มีโอกาส แต่มีการเก็บข้อมูล ให้ส่งสรุปสั้น ๆ
+    if not opportunities:
+        message = f"{session_name}\n\n"
+        message += f"📊 <b>ภาพรวมตลาด</b>\n"
+        message += f"S&P 500: <b>{market_data['SPY']:+.1f}%</b> | "
+        message += f"NASDAQ: <b>{market_data['QQQ']:+.1f}%</b>\n\n"
+        
+        if session_type == "after_close":
+            message += "ℹ️ ไม่มีหุ้นที่ตรงเงื่อนไข DCA วันนี้"
+        else:
+            message += "ℹ️ ยังไม่มีสัญญาณที่ชัดเจน"
+        
+        message += f"\n⏰ {now.strftime('%H:%M น.')}"
+        return message
+    
+    # มีโอกาส → สร้างข้อความเต็ม
+    message = f"{session_name}\n\n"
+    
+    # Header ตามช่วงเวลา
+    if session_type == "pre_market":
+        message += "🎯 <b>Gap Down ที่น่าสนใจ</b>\n\n"
+    elif session_type == "market_hours":
+        message += "⚡ <b>โอกาสช่วงเปิดตลาด</b>\n\n"
+    elif session_type == "after_hours":
+        message += "🌙 <b>After-Hours Alert</b>\n\n"
+    else:
+        message += "💎 <b>โอกาส DCA วันนี้</b>\n\n"
+    
+    # แสดงหุ้น (3 อันดับแรก)
+    for i, opp in enumerate(opportunities[:3], 1):
+        message += f"{i}️⃣ <b>{opp['symbol']}</b> ${opp['price']:.2f} "
+        message += f"<b>({opp['change_pct']:+.1f}%)</b>\n"
+        
+        # Score + Confidence
+        message += f"   💎 Score {opp['overall_score']}/100"
+        if opp.get('confidence'):
+            message += f" | 🎯 {opp['confidence']}"
+        message += "\n"
+        
+        # ข้อมูลเทคนิค
+        if opp.get('below_ma_pct'):
+            message += f"   📉 ต่ำกว่า MA20: {opp['below_ma_pct']:.1f}%\n"
+        
+        # สัญญาณพิเศษ
+        signals = []
+        
+        if opp.get('rsi'):
+            if opp['rsi'] < 30:
+                signals.append(f"RSI {opp['rsi']:.0f} (Strong Oversold)")
+            elif opp['rsi'] < 40:
+                signals.append(f"RSI {opp['rsi']:.0f} (Oversold)")
+        
+        if opp.get('risk_score') and opp['risk_score'] < 30:
+            signals.append("ความเสี่ยงต่ำ")
+        
+        if opp.get('recommendation') == 'Strong Buy':
+            signals.append("⭐ Strong Buy")
+        
+        if signals:
+            message += f"   ⚡ {' | '.join(signals)}\n"
+        
+        # Price Target
+        if opp.get('price_target'):
+            upside = ((opp['price_target'] - opp['price']) / opp['price']) * 100
+            message += f"   🎯 Target: ${opp['price_target']:.2f} (+{upside:.1f}%)\n"
+        
+        message += "\n"
+    
+    # ภาพรวมตลาด
+    message += "📊 <b>ตลาด:</b> "
+    message += f"S&P {market_data['SPY']:+.1f}% | "
+    message += f"NASDAQ {market_data['QQQ']:+.1f}%\n\n"
+    
+    # คำแนะนำตามช่วงเวลา
+    avg_change = (market_data['SPY'] + market_data['QQQ']) / 2
+    
+    if session_type == "pre_market":
+        message += "💡 <b>แนะนำ:</b> รอ 30 นาทีแรกให้ราคาเสถียร"
+    elif session_type == "market_hours":
+        if avg_change <= -1.5:
+            message += "💡 <b>แนะนำ:</b> ตลาดลงแรง → โอกาสซื้อเพิ่ม"
+        else:
+            message += "💡 <b>แนะนำ:</b> ติดตามความเคลื่อนไหว"
+    elif session_type == "after_hours":
+        message += "💡 <b>แนะนำ:</b> ตั้ง Limit Order สำหรับพรุ่งนี้"
+    else:  # after_close
+        if avg_change <= -2:
+            message += "💡 <b>แนะนำ:</b> ตลาดปรับฐานแรง → โอกาสทอง DCA"
+        elif avg_change <= -1:
+            message += "💡 <b>แนะนำ:</b> แบ่งเงินซื้อ 2-3 ครั้ง"
+        else:
+            message += "💡 <b>แนะนำ:</b> พิจารณาซื้อเพิ่มหุ้นคุณภาพดี"
+    
+    message += f"\n⏰ {now.strftime('%H:%M น.')}"
+    
+    return message
+
+
+async def send_market_alert_after_collection():
+    """ส่ง Alert หลังเก็บข้อมูลทุกครั้ง - ปรับข้อความตามช่วงเวลา"""
+    
+    print(f"\n{'='*60}")
+    print("📱 Generating Market Alert...")
+    print(f"{'='*60}\n")
+    
+    # 1. ระบุช่วงเวลา
+    session_type, session_name = get_current_session()
+    print(f"🕐 Session: {session_type} - {session_name}")
+    
+    # 2. หาโอกาสตามช่วงเวลา
+    opportunities = get_opportunities_by_type(session_type)
+    print(f"🔍 Found {len(opportunities)} opportunities")
+    
+    # 3. ดึงข้อมูลตลาด
+    market_data = get_market_indices_simple()
+    print(f"📊 Market: SPY {market_data['SPY']:+.1f}% | QQQ {market_data['QQQ']:+.1f}%")
+    
+    # 4. สร้างข้อความ (ส่งเสมอ แม้ไม่มีโอกาส)
+    message = format_alert_by_session(opportunities, market_data, session_type, session_name)
+    
+    if message:
+        print(f"\n📱 Sending alert...")
+        print("="*60)
+        print(message.replace('<b>', '').replace('</b>', ''))
+        print("="*60)
+        
+        # ส่ง Telegram
+        success = await send_telegram_message(message)
+        
+        if success:
+            print("\n✅ Market alert sent successfully!")
+        else:
+            print("\n⚠️ Failed to send alert")
+    
+    print(f"{'='*60}\n")
 
 
 async def main():
@@ -1460,14 +1746,14 @@ async def main():
             stats['failed'] += 1
         
         # ✅ เพิ่ม: ส่ง progress update ทุกๆ 10 หุ้น
-        if idx % 10 == 0:
-            progress = (idx / len(stocks)) * 100
-            await send_telegram_message(
-                f"📊 <b>Progress Update</b>\n\n"
-                f"✅ Completed: {idx}/{len(stocks)} ({progress:.1f}%)\n"
-                f"🟢 Success: {stats['success']}\n"
-                f"❌ Failed: {stats['failed']}"
-            )
+        #if idx % 10 == 0:
+        #    progress = (idx / len(stocks)) * 100
+        #    await send_telegram_message(
+        #        f"📊 <b>Progress Update</b>\n\n"
+        #        f"✅ Completed: {idx}/{len(stocks)} ({progress:.1f}%)\n"
+        #        f"🟢 Success: {stats['success']}\n"
+        #        f"❌ Failed: {stats['failed']}"
+        #    )
         
         # หน่วงเวลาก่อนประมวลผลหุ้นถัดไป
         await asyncio.sleep(3)
@@ -1507,6 +1793,8 @@ async def main():
     # ✅ เพิ่ม: ส่งสรุปผลสุดท้าย
     summary_message = format_telegram_summary(stats, len(stocks), start_time)
     await send_telegram_message(summary_message)
+
+    await send_market_alert_after_collection()
 
 
 if __name__ == "__main__":
