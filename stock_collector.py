@@ -1059,6 +1059,204 @@ async def send_telegram_message(message):
         print(f"⚠️ Failed to send Telegram: {e}")
         return False
 
+async def send_normal_dca(top_stocks):
+    """ส่งคำแนะนำ DCA แบบปกติ (มีหุ้น Score สูง)"""
+    
+    message = f"🎯 <b>DCA Today</b>: {datetime.now().strftime('%d %b %Y')}\n\n"
+    
+    # Top Pick
+    if top_stocks:
+        top = top_stocks[0]
+        risk_level = "ต่ำ" if top.get('risk_score', 50) < 30 else "ปานกลาง" if top.get('risk_score', 50) < 60 else "สูง"
+        
+        message += f"💰 <b>TOP PICK: {top['symbol']}</b>\n"
+        message += f"   ราคา: ${top['price_at_prediction']:.2f} | Score: {top['overall_score']}/100\n"
+        message += f"   Risk: {risk_level} | Confidence: {top.get('confidence', 'N/A')}\n\n"
+    
+    # Runner-up
+    if len(top_stocks) > 1:
+        runner = top_stocks[1]
+        risk_level = "ต่ำ" if runner.get('risk_score', 50) < 30 else "ปานกลาง"
+        
+        message += f"💎 <b>RUNNER-UP: {runner['symbol']}</b>\n"
+        message += f"   ราคา: ${runner['price_at_prediction']:.2f} | Score: {runner['overall_score']}/100\n"
+        message += f"   Risk: {risk_level}\n\n"
+    
+    message += "💡 <i>กลยุทธ์: DCA ทุกสัปดาห์/เดือน</i>"
+    
+    await send_telegram_message(message)
+
+async def send_no_opportunity_message():
+    """ส่งข้อความเมื่อไม่มีโอกาสเลย"""
+    
+    message = f"⏸️ <b>DCA Alert</b>: {datetime.now().strftime('%d %b %Y')}\n\n"
+    message += "ไม่พบโอกาสที่ดีในการลงทุนวันนี้\n\n"
+    message += "<b>สาเหตุ:</b>\n"
+    message += "   • ไม่มีหุ้น Score สูง (≥70)\n"
+    message += "   • ไม่มีหุ้น Oversold ที่น่าสนใจ\n\n"
+    message += "💡 <b>แนะนำ:</b>\n"
+    message += "   • รอดูสถานการณ์ตลาด\n"
+    message += "   • เก็บเงินไว้รอโอกาสที่ดีกว่า\n\n"
+    message += "💰 <i>\"Cash is also a position\"</i>"
+    
+    await send_telegram_message(message)
+
+
+async def send_daily_dca_recommendation():
+    """🎯 Main Function: ส่งคำแนะนำ DCA ประจำวัน"""
+    
+    print("\n" + "="*60)
+    print(f"🚀 Starting Daily DCA Analysis: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("="*60 + "\n")
+    
+    today = datetime.now().date().isoformat()
+    
+    # === STEP 1: หาหุ้นที่ Score สูง (≥70) ===
+    print("🔍 Searching for high-score stocks (Score ≥ 70)...")
+    
+    top_stocks = supabase.table("ai_predictions")\
+        .select("symbol, overall_score, recommendation, confidence, risk_score, price_at_prediction, created_at")\
+        .gte("created_at", today)\
+        .gte("overall_score", 70)\
+        .in_("recommendation", ["Strong Buy", "Buy"])\
+        .order("overall_score", desc=True)\
+        .limit(3)\
+        .execute()
+    
+    # === STEP 2: ถ้ามีหุ้น Score สูง → ส่งแบบปกติ ===
+    if top_stocks.data:
+        print(f"✅ Found {len(top_stocks.data)} high-score stocks")
+        for stock in top_stocks.data:
+            print(f"   - {stock['symbol']}: Score {stock['overall_score']}/100")
+        
+        await send_normal_dca(top_stocks.data)
+        return
+    
+    # === STEP 3: ไม่มีหุ้น Score สูง → หา Buy the Dip ===
+    print("⚠️ No high-score stocks found")
+    print("🔄 Switching to 'Buy the Dip' mode...\n")
+    
+    await send_dip_opportunities()
+    
+    print("\n" + "="*60)
+    print("✅ Daily DCA analysis completed!")
+    print("="*60 + "\n")
+
+async def send_dip_opportunities():
+    """🆕 หาหุ้นที่ Oversold + ราคาถูก (Buy the Dip Mode)"""
+    
+    print("🔄 Switching to 'Buy the Dip' mode...")
+    
+    today = datetime.now().date().isoformat()
+    
+    # 1. ดึงหุ้นที่ RSI < 35 (Oversold)
+    snapshots = supabase.table("stock_snapshots")\
+        .select("symbol, price, rsi, ema_20, ema_50")\
+        .gte("recorded_at", today)\
+        .lt("rsi", 40)\
+        .execute()
+    
+    if not snapshots.data:
+        print("⚠️ No oversold stocks found")
+        await send_no_opportunity_message()
+        return
+    
+    # 2. คำนวณหุ้นที่ต่ำกว่า MA20 มาก
+    dip_stocks = []
+    
+    for stock in snapshots.data:
+        if not stock.get('ema_20'):
+            continue
+        
+        # คำนวณ % ต่ำกว่า MA20
+        below_ma20 = ((stock['ema_20'] - stock['price']) / stock['ema_20']) * 100
+        
+        # เงื่อนไข: ต่ำกว่า MA20 อย่างน้อย 5%
+        if below_ma20 >= 5:
+            # ดึงข้อมูล AI prediction
+            pred = supabase.table("ai_predictions")\
+                .select("overall_score, risk_score, price_target")\
+                .eq("symbol", stock['symbol'])\
+                .gte("created_at", today)\
+                .order("created_at", desc=True)\
+                .limit(1)\
+                .execute()
+            
+            if pred.data:
+                score = pred.data[0]['overall_score']
+                risk = pred.data[0].get('risk_score', 50)
+                target = pred.data[0].get('price_target')
+                
+                # คำนวณ upside
+                upside_pct = ((target - stock['price']) / stock['price'] * 100) if target else None
+                
+                dip_stocks.append({
+                    'symbol': stock['symbol'],
+                    'price': stock['price'],
+                    'rsi': stock['rsi'],
+                    'below_ma20': below_ma20,
+                    'score': score,
+                    'risk': risk,
+                    'target': target,
+                    'upside_pct': upside_pct
+                })
+    
+    if not dip_stocks:
+        print("⚠️ No dip opportunities found")
+        await send_no_opportunity_message()
+        return
+    
+    # 3. เรียงตาม RSI (ยิ่งต่ำยิ่งดี = โอกาสกลับตัวสูง)
+    dip_stocks.sort(key=lambda x: x['rsi'])
+    
+    # 4. สร้างข้อความ
+    message = f"🔴 <b>Market Dip Alert</b>: {datetime.now().strftime('%d %b %Y')}\n\n"
+    message += "⚠️ ไม่มีหุ้น Score ≥ 70 วันนี้\n"
+    message += "💡 แต่พบ<b>โอกาสซื้อราคาถูก</b> (Buy the Dip)\n\n"
+    
+    # แสดงหุ้นที่น่าสนใจ 3 ตัวแรก
+    for i, stock in enumerate(dip_stocks[:3], 1):
+        # ระดับความเสี่ยง
+        if stock['risk'] < 30:
+            risk_emoji = "🟢"
+            risk_text = "ต่ำ"
+        elif stock['risk'] < 60:
+            risk_emoji = "🟡"
+            risk_text = "ปานกลาง"
+        else:
+            risk_emoji = "🔴"
+            risk_text = "สูง"
+        
+        # ระดับ RSI
+        if stock['rsi'] < 25:
+            rsi_status = "Strong Oversold"
+        elif stock['rsi'] < 30:
+            rsi_status = "Oversold"
+        else:
+            rsi_status = "เกือบ Oversold"
+        
+        message += f"💎 <b>#{i}: {stock['symbol']}</b>\n"
+        message += f"   ราคา: ${stock['price']:.2f}\n"
+        message += f"   Score: {stock['score']}/100 | {risk_emoji} Risk: {risk_text}\n"
+        message += f"   RSI: {stock['rsi']:.1f} ({rsi_status})\n"
+        message += f"   ต่ำกว่า MA20: {stock['below_ma20']:.1f}%\n"
+        
+        if stock['upside_pct']:
+            message += f"   🎯 Target: ${stock['target']:.2f} (+{stock['upside_pct']:.1f}%)\n"
+        
+        message += "\n"
+    
+    # เพิ่มคำแนะนำ
+    message += "📋 <b>กลยุทธ์แนะนำ:</b>\n"
+    message += "   • ซื้อทีละน้อย แบ่งเป็น 2-3 งวด\n"
+    message += "   • รอดูอีก 1-2 วัน ราคาอาจถูกกว่านี้\n"
+    message += "   • ตั้ง Stop Loss ไว้ -10% เผื่อลงต่อ\n\n"
+    message += "⚠️ <i>High Risk, High Reward - ลงทุนเท่าที่เสียได้</i>"
+    
+    await send_telegram_message(message)
+
+
+
 
 def format_telegram_summary(stats, total_stocks, start_time):
     """สร้างข้อความสรุปสำหรับ Telegram"""
@@ -1798,5 +1996,5 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(send_daily_dca_recommendation())
   
