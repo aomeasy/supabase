@@ -1142,20 +1142,16 @@ async def send_daily_dca_recommendation():
     print("✅ Daily DCA analysis completed!")
     print("="*60 + "\n")
 
+
+
+
+
 async def send_dip_opportunities():
     """🆕 หาหุ้นที่ Oversold + ราคาถูก (Buy the Dip Mode)"""
     
     print("🔄 Switching to 'Buy the Dip' mode...")
     
     today = datetime.now().date().isoformat()
-
-
-    if not dip_stocks:
-        print("⚠️ No dip opportunities found")
-        # 🆕 ใช้ฟังก์ชันใหม่
-        await send_enhanced_no_opportunity_message()
-        return
-
     
     # 1. ดึงหุ้นที่ RSI < 35 (Oversold)
     snapshots = supabase.table("stock_snapshots")\
@@ -1166,11 +1162,12 @@ async def send_dip_opportunities():
     
     if not snapshots.data:
         print("⚠️ No oversold stocks found")
-        await send_no_opportunity_message()
+        # 🆕 ใช้ฟังก์ชันใหม่
+        await send_enhanced_no_opportunity_message()
         return
     
     # 2. คำนวณหุ้นที่ต่ำกว่า MA20 มาก
-    dip_stocks = []
+    dip_stocks = []  # ✅ สร้างตัวแปรก่อน!
     
     for stock in snapshots.data:
         if not stock.get('ema_20'):
@@ -1209,9 +1206,10 @@ async def send_dip_opportunities():
                     'upside_pct': upside_pct
                 })
     
+    # ✅ ตอนนี้เช็คได้แล้ว เพราะ dip_stocks มีอยู่จริง
     if not dip_stocks:
         print("⚠️ No dip opportunities found")
-        await send_no_opportunity_message()
+        await send_enhanced_no_opportunity_message()
         return
     
     # 3. เรียงตาม RSI (ยิ่งต่ำยิ่งดี = โอกาสกลับตัวสูง)
@@ -1262,7 +1260,7 @@ async def send_dip_opportunities():
     message += "⚠️ <i>High Risk, High Reward - ลงทุนเท่าที่เสียได้</i>"
     
     await send_telegram_message(message)
-
+     
 
 
 
