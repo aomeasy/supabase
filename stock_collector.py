@@ -1148,6 +1148,14 @@ async def send_dip_opportunities():
     print("🔄 Switching to 'Buy the Dip' mode...")
     
     today = datetime.now().date().isoformat()
+
+
+    if not dip_stocks:
+        print("⚠️ No dip opportunities found")
+        # 🆕 ใช้ฟังก์ชันใหม่
+        await send_enhanced_no_opportunity_message()
+        return
+
     
     # 1. ดึงหุ้นที่ RSI < 35 (Oversold)
     snapshots = supabase.table("stock_snapshots")\
@@ -1547,12 +1555,524 @@ def format_alert_by_session(opportunities, market_data, session_type, session_na
     return message
 
 
+# ========================================
+# 📊 ANALYTICS FUNCTIONS
+# ========================================
+
+def get_market_overview_detailed():
+    """ดึงข้อมูลตลาดแบบละเอียด พร้อมเปรียบเทียบ"""
+    try:
+        today = datetime.now().date().isoformat()
+        yesterday = (datetime.now() - timedelta(days=1)).date().isoformat()
+        
+        result = {
+            'SPY': {'current': 0, 'prev': 0, 'change': 0},
+            'QQQ': {'current': 0, 'prev': 0, 'change': 0},
+            'VIX': {'current': 0, 'prev': 0, 'change': 0}
+        }
+        
+        for symbol in ['SPY', 'QQQ', 'VIX']:
+            # ข้อมูลวันนี้
+            today_data = supabase.table("stock_snapshots")\
+                .select("price, change_pct")\
+                .eq("symbol", symbol)\
+                .gte("recorded_at", today)\
+                .order("recorded_at", desc=True)\
+                .limit(1)\
+                .execute()
+            
+            # ข้อมูลเมื่อวาน
+            yesterday_data = supabase.table("stock_snapshots")\
+                .select("price")\
+                .eq("symbol", symbol)\
+                .gte("recorded_at", yesterday)\
+                .lt("recorded_at", today)\
+                .order("recorded_at", desc=True)\
+                .limit(1)\
+                .execute()
+            
+            if today_data.data:
+                result[symbol]['current'] = today_data.data[0]['price']
+                result[symbol]['change'] = today_data.data[0]['change_pct']
+                
+                if yesterday_data.data:
+                    result[symbol]['prev'] = yesterday_data.data[0]['price']
+        
+        return result
+        
+    except Exception as e:
+        print(f"⚠️ Error getting market overview: {e}")
+        return None
+
+
+def get_portfolio_health_distribution():
+    """แบ่งหุ้นตาม Health Zone"""
+    try:
+        today = datetime.now().date().isoformat()
+        
+        # ดึง snapshots ล่าสุด
+        snapshots = supabase.table("stock_snapshots")\
+            .select("symbol, rsi, price, ema_20, change_pct")\
+            .gte("recorded_at", today)\
+            .execute()
+        
+        if not snapshots.data:
+            return None
+        
+        zones = {
+            'strong_bullish': [],    # RSI 50-70, Above EMA20
+            'bullish': [],           # RSI 40-70, Above EMA20
+            'neutral': [],           # RSI 30-70
+            'oversold': [],          # RSI < 30
+            'overbought': [],        # RSI > 70
+            'bearish': []            # Below EMA20
+        }
+        
+        for snap in snapshots.data:
+            symbol = snap['symbol']
+            rsi = snap.get('rsi')
+            price = snap.get('price')
+            ema_20 = snap.get('ema_20')
+            change = snap.get('change_pct', 0)
+            
+            if not rsi:
+                continue
+            
+            # จัด Zone
+            if rsi > 70:
+                zones['overbought'].append({'symbol': symbol, 'rsi': rsi, 'change': change})
+            elif rsi < 30:
+                zones['oversold'].append({'symbol': symbol, 'rsi': rsi, 'change': change})
+            elif price and ema_20:
+                if price > ema_20:
+                    if 50 <= rsi <= 70:
+                        zones['strong_bullish'].append({'symbol': symbol, 'rsi': rsi, 'change': change})
+                    else:
+                        zones['bullish'].append({'symbol': symbol, 'rsi': rsi, 'change': change})
+                else:
+                    zones['bearish'].append({'symbol': symbol, 'rsi': rsi, 'change': change})
+            else:
+                zones['neutral'].append({'symbol': symbol, 'rsi': rsi, 'change': change})
+        
+        return zones
+        
+    except Exception as e:
+        print(f"⚠️ Error calculating portfolio health: {e}")
+        return None
+
+
+def get_top_movers():
+    """หาหุ้นที่ขึ้น/ลงมากที่สุด พร้อม Score"""
+    try:
+        today = datetime.now().date().isoformat()
+        
+        # ดึง snapshots
+        snapshots = supabase.table("stock_snapshots")\
+            .select("symbol, price, change_pct, rsi")\
+            .gte("recorded_at", today)\
+            .execute()
+        
+        # ดึง predictions
+        predictions = supabase.table("ai_predictions")\
+            .select("symbol, overall_score, recommendation")\
+            .gte("created_at", today)\
+            .execute()
+        
+        if not snapshots.data:
+            return None
+        
+        # สร้าง dict สำหรับ predictions
+        pred_dict = {p['symbol']: p for p in (predictions.data or [])}
+        
+        # รวมข้อมูล
+        movers = []
+        for snap in snapshots.data:
+            symbol = snap['symbol']
+            pred = pred_dict.get(symbol, {})
+            
+            movers.append({
+                'symbol': symbol,
+                'price': snap['price'],
+                'change': snap['change_pct'],
+                'rsi': snap.get('rsi'),
+                'score': pred.get('overall_score', 0),
+                'recommendation': pred.get('recommendation', 'N/A')
+            })
+        
+        # เรียงตาม change_pct
+        movers.sort(key=lambda x: x['change'], reverse=True)
+        
+        return {
+            'gainers': movers[:5],
+            'losers': movers[-5:][::-1]  # กลับลำดับ
+        }
+        
+    except Exception as e:
+        print(f"⚠️ Error getting top movers: {e}")
+        return None
+
+
+def get_sector_performance():
+    """วิเคราะห์ Performance แยกตาม Sector/Category"""
+    try:
+        today = datetime.now().date().isoformat()
+        
+        # ดึง master + snapshots
+        stocks = supabase.table("stock_master")\
+            .select("symbol, category")\
+            .eq("is_active", True)\
+            .execute()
+        
+        snapshots = supabase.table("stock_snapshots")\
+            .select("symbol, change_pct")\
+            .gte("recorded_at", today)\
+            .execute()
+        
+        if not stocks.data or not snapshots.data:
+            return None
+        
+        # สร้าง dict
+        snap_dict = {s['symbol']: s['change_pct'] for s in snapshots.data}
+        
+        # คำนวณ Average ตาม Category
+        categories = {}
+        for stock in stocks.data:
+            category = stock.get('category', 'Core')
+            symbol = stock['symbol']
+            
+            if symbol in snap_dict:
+                if category not in categories:
+                    categories[category] = []
+                categories[category].append(snap_dict[symbol])
+        
+        # คำนวณค่าเฉลี่ย
+        result = {}
+        for cat, changes in categories.items():
+            result[cat] = {
+                'avg_change': round(sum(changes) / len(changes), 2),
+                'count': len(changes)
+            }
+        
+        # เรียงตาม performance
+        sorted_cats = sorted(result.items(), key=lambda x: x[1]['avg_change'], reverse=True)
+        
+        return dict(sorted_cats)
+        
+    except Exception as e:
+        print(f"⚠️ Error calculating sector performance: {e}")
+        return None
+
+
+def get_score_changes():
+    """เปรียบเทียบ Score วันนี้กับเมื่อวาน"""
+    try:
+        today = datetime.now().date().isoformat()
+        yesterday = (datetime.now() - timedelta(days=1)).date().isoformat()
+        
+        # ดึง predictions วันนี้
+        today_preds = supabase.table("ai_predictions")\
+            .select("symbol, overall_score")\
+            .gte("created_at", today)\
+            .execute()
+        
+        # ดึง predictions เมื่อวาน
+        yesterday_preds = supabase.table("ai_predictions")\
+            .select("symbol, overall_score")\
+            .gte("created_at", yesterday)\
+            .lt("created_at", today)\
+            .execute()
+        
+        if not today_preds.data:
+            return None
+        
+        # สร้าง dict
+        today_dict = {p['symbol']: p['overall_score'] for p in today_preds.data}
+        yesterday_dict = {p['symbol']: p['overall_score'] for p in (yesterday_preds.data or [])}
+        
+        # คำนวณการเปลี่ยนแปลง
+        changes = []
+        for symbol, today_score in today_dict.items():
+            if symbol in yesterday_dict:
+                yesterday_score = yesterday_dict[symbol]
+                diff = today_score - yesterday_score
+                
+                if abs(diff) >= 10:  # เปลี่ยนแปลงอย่างน้อย 10 คะแนน
+                    changes.append({
+                        'symbol': symbol,
+                        'today': today_score,
+                        'yesterday': yesterday_score,
+                        'change': diff
+                    })
+        
+        # เรียงตามการเปลี่ยนแปลง
+        changes.sort(key=lambda x: abs(x['change']), reverse=True)
+        
+        return changes[:10]  # แสดง 10 อันดับแรก
+        
+    except Exception as e:
+        print(f"⚠️ Error calculating score changes: {e}")
+        return None
+
+
+def get_fear_greed_indicator():
+    """สร้าง Fear & Greed Indicator จาก VIX + RSI Portfolio"""
+    try:
+        today = datetime.now().date().isoformat()
+        
+        # ดึง VIX
+        vix_data = supabase.table("stock_snapshots")\
+            .select("price")\
+            .eq("symbol", "VIX")\
+            .gte("recorded_at", today)\
+            .order("recorded_at", desc=True)\
+            .limit(1)\
+            .execute()
+        
+        # ดึง RSI เฉลี่ยของ Portfolio
+        snapshots = supabase.table("stock_snapshots")\
+            .select("rsi")\
+            .gte("recorded_at", today)\
+            .execute()
+        
+        vix = vix_data.data[0]['price'] if vix_data.data else 15
+        
+        rsi_values = [s['rsi'] for s in (snapshots.data or []) if s.get('rsi')]
+        avg_rsi = sum(rsi_values) / len(rsi_values) if rsi_values else 50
+        
+        # คำนวณ Fear & Greed Score (0-100)
+        # VIX: ต่ำ = Greed, สูง = Fear
+        # RSI: ต่ำ = Fear, สูง = Greed
+        
+        vix_score = max(0, min(100, (30 - vix) / 30 * 100))  # VIX 30 = Fear, VIX 10 = Greed
+        rsi_score = avg_rsi
+        
+        fg_score = int((vix_score + rsi_score) / 2)
+        
+        # กำหนดระดับ
+        if fg_score >= 75:
+            level = "Extreme Greed"
+            emoji = "🔴"
+        elif fg_score >= 60:
+            level = "Greed"
+            emoji = "🟠"
+        elif fg_score >= 40:
+            level = "Neutral"
+            emoji = "🟡"
+        elif fg_score >= 25:
+            level = "Fear"
+            emoji = "🔵"
+        else:
+            level = "Extreme Fear"
+            emoji = "🟢"
+        
+        return {
+            'score': fg_score,
+            'level': level,
+            'emoji': emoji,
+            'vix': vix,
+            'avg_rsi': round(avg_rsi, 1)
+        }
+        
+    except Exception as e:
+        print(f"⚠️ Error calculating fear/greed: {e}")
+        return None
+
+
+# ========================================
+# 📱 ENHANCED ALERT FUNCTIONS
+# ========================================
+
+async def send_market_pulse_alert():
+    """
+    📊 Market Pulse - ส่งทุกครั้งที่เก็บข้อมูล
+    แสดงภาพรวมตลาด + Portfolio Health + Top Movers
+    """
+    
+    print("\n📊 Generating Market Pulse Alert...")
+    
+    # ดึงข้อมูล
+    market = get_market_overview_detailed()
+    health = get_portfolio_health_distribution()
+    movers = get_top_movers()
+    sectors = get_sector_performance()
+    fear_greed = get_fear_greed_indicator()
+    
+    if not market:
+        print("⚠️ Market data not available")
+        return
+    
+    # สร้างข้อความ
+    session_type, session_name = get_current_session()
+    
+    message = f"{session_name}\n\n"
+    
+    # === MARKET OVERVIEW ===
+    message += "📊 <b>Market Overview</b>\n"
+    message += f"S&P 500: ${market['SPY']['current']:.2f} "
+    message += f"(<b>{market['SPY']['change']:+.1f}%</b>)\n"
+    message += f"NASDAQ: ${market['QQQ']['current']:.2f} "
+    message += f"(<b>{market['QQQ']['change']:+.1f}%</b>)\n"
+    
+    if fear_greed:
+        message += f"\n{fear_greed['emoji']} <b>Market Sentiment:</b> {fear_greed['level']}\n"
+        message += f"VIX: {fear_greed['vix']:.1f} | Avg RSI: {fear_greed['avg_rsi']:.0f}\n"
+    
+    # === PORTFOLIO HEALTH ===
+    if health:
+        total_stocks = sum(len(v) for v in health.values())
+        message += f"\n🏥 <b>Portfolio Health</b> ({total_stocks} stocks)\n"
+        
+        if health['strong_bullish']:
+            message += f"💪 Strong Bullish: {len(health['strong_bullish'])}\n"
+        if health['bullish']:
+            message += f"🟢 Bullish: {len(health['bullish'])}\n"
+        if health['neutral']:
+            message += f"🟡 Neutral: {len(health['neutral'])}\n"
+        if health['oversold']:
+            message += f"🔵 Oversold: {len(health['oversold'])} "
+            message += f"({', '.join([s['symbol'] for s in health['oversold'][:3]])})\n"
+        if health['overbought']:
+            message += f"🔴 Overbought: {len(health['overbought'])} "
+            message += f"({', '.join([s['symbol'] for s in health['overbought'][:3]])})\n"
+        if health['bearish']:
+            message += f"📉 Bearish: {len(health['bearish'])}\n"
+    
+    # === TOP MOVERS ===
+    if movers:
+        message += "\n🚀 <b>Top Movers</b>\n"
+        
+        # Top Gainer
+        if movers['gainers']:
+            top = movers['gainers'][0]
+            message += f"▲ {top['symbol']}: "
+            message += f"<b>+{top['change']:.1f}%</b> "
+            message += f"(Score: {top['score']}/100)\n"
+        
+        # Top Loser
+        if movers['losers']:
+            bottom = movers['losers'][0]
+            message += f"▼ {bottom['symbol']}: "
+            message += f"<b>{bottom['change']:.1f}%</b> "
+            message += f"(RSI: {bottom['rsi']:.0f} | Score: {bottom['score']}/100)\n"
+    
+    # === SECTOR PERFORMANCE ===
+    if sectors:
+        message += "\n📈 <b>Sector Performance</b>\n"
+        sector_emoji = {
+            'Tech': '💻',
+            'Growth': '🚀',
+            'Value': '💎',
+            'Dividend': '💰',
+            'ETF': '📊',
+            'Core': '🏛️'
+        }
+        
+        for cat, data in list(sectors.items())[:5]:  # แสดง 5 อันดับแรก
+            emoji = sector_emoji.get(cat, '📊')
+            change_str = f"+{data['avg_change']:.1f}%" if data['avg_change'] >= 0 else f"{data['avg_change']:.1f}%"
+            message += f"{emoji} {cat}: <b>{change_str}</b> ({data['count']} stocks)\n"
+    
+    # === ACTIONABLE INSIGHT ===
+    message += "\n💡 <b>Quick Take:</b> "
+    
+    if fear_greed:
+        if fear_greed['level'] == "Extreme Fear":
+            message += "ตลาดกลัวมาก → โอกาสซื้อ! "
+        elif fear_greed['level'] == "Extreme Greed":
+            message += "ตลาดโลภมาก → ระวังปรับฐาน "
+    
+    if health:
+        if len(health['oversold']) >= 3:
+            message += f"มี {len(health['oversold'])} หุ้น Oversold น่าสนใจ"
+        elif len(health['strong_bullish']) >= 5:
+            message += f"มี {len(health['strong_bullish'])} หุ้นแข็งแกร่ง"
+    
+    message += f"\n\n⏰ {datetime.now().strftime('%H:%M น.')}"
+    
+    await send_telegram_message(message)
+
+
+async def send_daily_trend_analysis():
+    """
+    📈 Daily Trend Analysis - ส่งวันละ 1 ครั้ง (After Close)
+    วิเคราะห์แนวโน้ม 7 วัน + Score Changes
+    """
+    
+    print("\n📈 Generating Daily Trend Analysis...")
+    
+    score_changes = get_score_changes()
+    
+    if not score_changes:
+        print("⚠️ No significant score changes")
+        return
+    
+    message = "📈 <b>Daily Trend Analysis</b>\n\n"
+    
+    message += "🔄 <b>Significant Score Changes (24h)</b>\n"
+    
+    for change in score_changes[:5]:
+        arrow = "🟢" if change['change'] > 0 else "🔴"
+        message += f"{arrow} <b>{change['symbol']}</b>: "
+        message += f"{change['yesterday']} → {change['today']} "
+        message += f"(<b>{change['change']:+d}</b>)\n"
+    
+    message += f"\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    
+    await send_telegram_message(message)
+
+
+async def send_enhanced_no_opportunity_message():
+    """ส่งข้อความเมื่อไม่มีโอกาส พร้อมข้อมูลประกอบ"""
+    
+    market = get_market_overview_detailed()
+    health = get_portfolio_health_distribution()
+    fear_greed = get_fear_greed_indicator()
+    
+    message = f"⏸️ <b>DCA Alert</b>: {datetime.now().strftime('%d %b %Y')}\n\n"
+    message += "ไม่พบโอกาสที่ดีในการลงทุนวันนี้\n\n"
+    
+    message += "<b>สาเหตุ:</b>\n"
+    message += "   • ไม่มีหุ้น Score สูง (≥70)\n"
+    message += "   • ไม่มีหุ้น Oversold ที่น่าสนใจ\n\n"
+    
+    # เพิ่มข้อมูลตลาด
+    if market:
+        message += "<b>ภาพรวมตลาด:</b>\n"
+        message += f"   • S&P 500: {market['SPY']['change']:+.1f}%\n"
+        message += f"   • NASDAQ: {market['QQQ']['change']:+.1f}%\n"
+        
+        if fear_greed:
+            message += f"   • Sentiment: {fear_greed['level']}\n"
+        
+        message += "\n"
+    
+    # เพิ่มข้อมูล Portfolio
+    if health:
+        message += "<b>Portfolio Status:</b>\n"
+        if health['oversold']:
+            message += f"   • Oversold: {len(health['oversold'])} stocks (แต่ Score ไม่ดี)\n"
+        if health['overbought']:
+            message += f"   • Overbought: {len(health['overbought'])} stocks (ระวัง!)\n"
+        message += "\n"
+    
+    message += "💡 <b>แนะนำ:</b>\n"
+    message += "   • รอดูสถานการณ์ตลาด\n"
+    message += "   • เก็บเงินไว้รอโอกาสที่ดีกว่า\n\n"
+    message += "💰 <i>\"Cash is also a position\"</i>"
+    
+    await send_telegram_message(message)
+
+
+
+
 async def send_market_alert_after_collection():
     """ส่ง Alert หลังเก็บข้อมูลทุกครั้ง - ปรับข้อความตามช่วงเวลา"""
     
     print(f"\n{'='*60}")
     print("📱 Generating Market Alert...")
     print(f"{'='*60}\n")
+
+    await send_market_pulse_alert()
     
     # 1. ระบุช่วงเวลา
     session_type, session_name = get_current_session()
@@ -1609,6 +2129,11 @@ async def main():
         f"📊 Processing {len(stocks)} symbols\n"
         f"⏰ {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
     )
+    await send_market_alert_after_collection()
+
+    session_type, _ = get_current_session()
+    if session_type == "after_close":
+        await send_daily_trend_analysis()
 
     print(f"\n🚀 Starting technical analysis for {len(stocks)} symbols")
     print(f"📅 Analysis time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
