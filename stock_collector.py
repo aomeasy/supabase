@@ -5,6 +5,8 @@ import asyncio
 import yfinance as yf
 import pandas as pd
 import talib
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
 import requests 
 from datetime import datetime, timedelta
@@ -1773,7 +1775,384 @@ async def send_market_alert_after_collection():
     
     print(f"{'='*60}\n")
   
- 
+
+
+
+async def analyze_single_stock(symbol):
+    """
+    วิเคราะห์หุ้นตัวเดียวและคืนข้อมูลครบถ้วน
+    
+    Returns: dict with analysis results or None if failed
+    """
+    try:
+        print(f"\n{'='*60}")
+        print(f"🔍 Analyzing: {symbol}")
+        print(f"{'='*60}")
+        
+        # 1. ดึงข้อมูล Technical
+        data = await fetch_data_waterfall(symbol)
+        
+        if not data:
+            return {
+                'success': False,
+                'error': f"❌ Cannot fetch data for {symbol}"
+            }
+        
+        # 2. ดึง Market Cap + Fundamental (ถ้าไม่ใช่ ETF)
+        market_cap = None
+        fundamental_data = None
+        category = 'Core'  # default
+        
+        # ตรวจสอบ category จาก stock_master
+        try:
+            stock_info = supabase.table("stock_master")\
+                .select("category")\
+                .eq("symbol", symbol)\
+                .execute()
+            
+            if stock_info.data:
+                category = stock_info.data[0].get('category', 'Core')
+        except:
+            pass
+        
+        if category != 'ETF':
+            try:
+                stock = yf.Ticker(symbol)
+                info = stock.info
+                
+                market_cap = info.get('marketCap')
+                
+                fundamental_data = {
+                    "pe_ratio": info.get('forwardPE') or info.get('trailingPE'),
+                    "peg_ratio": info.get('pegRatio'),
+                    "eps_growth_pct": info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None,
+                    "market_cap": market_cap
+                }
+            except Exception as e:
+                print(f"⚠️ Could not fetch fundamental data: {e}")
+        
+        # 3. คำนวณ Upside
+        upside_pct = calculate_upside_pct(
+            data.get("price"), 
+            data.get("ema_200"),
+            data.get("ema_50")
+        )
+        
+        # 4. ดึง Analyst & Sentiment (ถ้าไม่ใช่ ETF)
+        analyst_pct = None if category == 'ETF' else fetch_analyst_data(symbol)
+        sentiment = None if category == 'ETF' else fetch_sentiment_score(symbol)
+        
+        # 5. ดึงข่าว (ถ้าไม่ใช่ ETF)
+        news_records = []
+        news_sentiment_advanced = None
+        
+        if category != 'ETF':
+            print(f"📰 Fetching news for {symbol}...")
+            news_records = fetch_news_data(symbol)
+            
+            if news_records:
+                sentiment_scores = []
+                for news in news_records:
+                    if 'calculate_news_sentiment_advanced' in globals():
+                        adv_sentiment = calculate_news_sentiment_advanced(
+                            news.get('title', ''),
+                            news.get('summary', '')
+                        )
+                        sentiment_scores.append(adv_sentiment)
+                
+                if sentiment_scores:
+                    news_sentiment_advanced = round(sum(sentiment_scores) / len(sentiment_scores), 2)
+        
+        # 6. คำนวณ AI Prediction
+        tech_data_full = {
+            'price': data.get('price'),
+            'rsi': data.get('rsi'),
+            'macd': data.get('macd'),
+            'macd_signal': data.get('macd_signal'),
+            'ema_20': data.get('ema_20'),
+            'ema_50': data.get('ema_50'),
+            'ema_200': data.get('ema_200'),
+            'bb_upper': data.get('bb_upper'),
+            'bb_lower': data.get('bb_lower'),
+            'upside_pct': upside_pct,
+            'analyst_buy_pct': analyst_pct
+        }
+        
+        final_sentiment = news_sentiment_advanced if news_sentiment_advanced is not None else sentiment
+        
+        # คำนวณ Score
+        if 'calculate_overall_score_with_risk' in globals():
+            overall_score = calculate_overall_score_with_risk(
+                symbol=symbol,
+                tech_data=tech_data_full,
+                fundamental_data=fundamental_data,
+                news_sentiment=final_sentiment,
+                category=category,
+                market_cap=market_cap
+            )
+            risk_score = calculate_risk_score(tech_data_full, fundamental_data, market_cap)
+        else:
+            overall_score = calculate_overall_score(
+                symbol=symbol,
+                tech_data=tech_data_full,
+                fundamental_data=fundamental_data,
+                news_sentiment=final_sentiment
+            )
+            risk_score = 0
+        
+        # สร้างคำแนะนำ
+        if 'generate_recommendation_advanced' in globals():
+            recommendation_data = generate_recommendation_advanced(
+                overall_score=overall_score,
+                price=data.get('price'),
+                upside_pct=upside_pct,
+                risk_score=risk_score,
+                category=category
+            )
+            
+            recommendation = recommendation_data['recommendation']
+            reason = recommendation_data['reason']
+            price_target = recommendation_data['price_target']
+            confidence = recommendation_data.get('confidence', 'Medium')
+            time_horizon = recommendation_data.get('time_horizon', '6 months')
+        else:
+            recommendation, reason, price_target = generate_recommendation(
+                overall_score=overall_score,
+                price=data.get('price'),
+                upside_pct=upside_pct
+            )
+            confidence = None
+            time_horizon = None
+        
+        # 7. ดึง Comparative Insights
+        insights = get_comparative_insights(symbol) if 'get_comparative_insights' in globals() else {}
+        
+        # 8. Return ผลลัพธ์
+        return {
+            'success': True,
+            'symbol': symbol,
+            'category': category,
+            'price': data.get('price'),
+            'change_pct': data.get('change_pct'),
+            'rsi': data.get('rsi'),
+            'macd': data.get('macd'),
+            'macd_signal': data.get('macd_signal'),
+            'ema_20': data.get('ema_20'),
+            'ema_50': data.get('ema_50'),
+            'ema_200': data.get('ema_200'),
+            'upside_pct': upside_pct,
+            'analyst_buy_pct': analyst_pct,
+            'sentiment_score': final_sentiment,
+            'news_count': len(news_records),
+            'news_sample': news_records[0] if news_records else None,
+            'overall_score': overall_score,
+            'risk_score': risk_score,
+            'recommendation': recommendation,
+            'reason': reason,
+            'price_target': price_target,
+            'confidence': confidence,
+            'time_horizon': time_horizon,
+            'market_cap': market_cap,
+            'fundamental': fundamental_data,
+            'insights': insights
+        }
+        
+    except Exception as e:
+        print(f"❌ Error analyzing {symbol}: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'success': False,
+            'error': f"❌ Error: {str(e)}"
+        }
+
+
+def format_stock_analysis_message(result):
+    """
+    จัดรูปแบบข้อความวิเคราะห์หุ้นสำหรับ Telegram
+    """
+    if not result.get('success'):
+        return result.get('error', '❌ Analysis failed')
+    
+    symbol = result['symbol']
+    
+    # Header
+    message = f"📊 <b>Analysis: {symbol}</b>"
+    if result.get('category'):
+        message += f" ({result['category']})"
+    message += "\n\n"
+    
+    # Price & Change
+    message += f"💰 <b>Price:</b> ${result['price']:.2f}"
+    if result.get('change_pct') is not None:
+        change_emoji = "🟢" if result['change_pct'] > 0 else "🔴"
+        message += f" {change_emoji} {result['change_pct']:+.2f}%"
+    message += "\n\n"
+    
+    # Technical Indicators
+    message += "📈 <b>Technical:</b>\n"
+    
+    if result.get('rsi'):
+        rsi_status = ""
+        if result['rsi'] < 30:
+            rsi_status = " (Strong Oversold 🟢)"
+        elif result['rsi'] < 40:
+            rsi_status = " (Oversold 🟢)"
+        elif result['rsi'] > 70:
+            rsi_status = " (Overbought 🔴)"
+        message += f"   • RSI: {result['rsi']:.1f}{rsi_status}\n"
+    
+    if result.get('macd') and result.get('macd_signal'):
+        macd_signal = "Bullish 🟢" if result['macd'] > result['macd_signal'] else "Bearish 🔴"
+        message += f"   • MACD: {macd_signal}\n"
+    
+    if result.get('upside_pct'):
+        message += f"   • Upside Potential: {result['upside_pct']:+.1f}%\n"
+    
+    # Comparative Insights
+    insights = result.get('insights', {})
+    if insights.get('week_ago_change') is not None:
+        week_emoji = "📈" if insights['week_ago_change'] > 0 else "📉"
+        message += f"   • 7d Change: {week_emoji} {insights['week_ago_change']:+.1f}%\n"
+    
+    if insights.get('current_vs_30d') is not None:
+        score_emoji = "⬆️" if insights['current_vs_30d'] > 0 else "⬇️"
+        message += f"   • Score vs 30d Avg: {score_emoji} {insights['current_vs_30d']:+.1f}\n"
+    
+    message += "\n"
+    
+    # AI Analysis
+    message += f"🤖 <b>AI Analysis:</b>\n"
+    message += f"   • Score: {result['overall_score']}/100\n"
+    message += f"   • Recommendation: <b>{result['recommendation']}</b>\n"
+    
+    if result.get('confidence'):
+        message += f"   • Confidence: {result['confidence']}\n"
+    
+    if result.get('risk_score'):
+        risk_level = "Low" if result['risk_score'] < 30 else "Medium" if result['risk_score'] < 60 else "High"
+        message += f"   • Risk: {risk_level} ({result['risk_score']}/100)\n"
+    
+    message += f"   • Reason: {result['reason']}\n"
+    
+    if result.get('price_target'):
+        upside_to_target = ((result['price_target'] - result['price']) / result['price']) * 100
+        message += f"   • Target: ${result['price_target']:.2f} (+{upside_to_target:.1f}%)\n"
+    
+    if result.get('time_horizon'):
+        message += f"   • Time Horizon: {result['time_horizon']}\n"
+    
+    message += "\n"
+    
+    # News
+    if result.get('news_count', 0) > 0:
+        message += f"📰 <b>News:</b> {result['news_count']} articles found\n"
+        
+        news_sample = result.get('news_sample')
+        if news_sample:
+            title = news_sample.get('title_th') or news_sample.get('title', '')
+            if len(title) > 100:
+                title = title[:100] + "..."
+            message += f"   Latest: {title}\n"
+            
+            if news_sample.get('sentiment_score'):
+                sent_emoji = "🟢" if news_sample['sentiment_score'] > 0 else "🔴" if news_sample['sentiment_score'] < 0 else "🟡"
+                message += f"   Sentiment: {sent_emoji} {news_sample['sentiment_score']:.2f}\n"
+        
+        message += "\n"
+    
+    # Fundamental (ถ้ามี)
+    fundamental = result.get('fundamental')
+    if fundamental and any(fundamental.values()):
+        message += "💼 <b>Fundamental:</b>\n"
+        
+        if fundamental.get('pe_ratio'):
+            message += f"   • P/E Ratio: {fundamental['pe_ratio']:.2f}\n"
+        
+        if fundamental.get('peg_ratio'):
+            message += f"   • PEG Ratio: {fundamental['peg_ratio']:.2f}\n"
+        
+        if fundamental.get('eps_growth_pct'):
+            message += f"   • EPS Growth: {fundamental['eps_growth_pct']:.1f}%\n"
+        
+        if result.get('market_cap'):
+            mc = result['market_cap']
+            mc_str = f"${mc/1e9:.1f}B" if mc >= 1e9 else f"${mc/1e6:.1f}M"
+            message += f"   • Market Cap: {mc_str}\n"
+    
+    message += f"\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    return message
+
+
+async def handle_symbol_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle เมื่อ user ส่ง symbol มา
+    """
+    user_message = update.message.text.strip().upper()
+    
+    # ตรวจสอบว่าเป็น symbol (1-5 ตัวอักษร)
+    if not user_message or len(user_message) > 5 or not user_message.isalpha():
+        await update.message.reply_text(
+            "❌ กรุณาส่ง Stock Symbol ที่ถูกต้อง\n"
+            "ตัวอย่าง: AAPL, MSFT, GOOGL"
+        )
+        return
+    
+    symbol = user_message
+    
+    # ส่งข้อความ Loading
+    loading_msg = await update.message.reply_text(
+        f"🔍 กำลังวิเคราะห์ {symbol}...\n"
+        "⏳ โปรดรอสักครู่"
+    )
+    
+    try:
+        # วิเคราะห์หุ้น
+        result = await analyze_single_stock(symbol)
+        
+        # สร้างข้อความ
+        response = format_stock_analysis_message(result)
+        
+        # ส่งผลลัพธ์
+        await loading_msg.edit_text(response, parse_mode='HTML')
+        
+    except Exception as e:
+        await loading_msg.edit_text(
+            f"❌ เกิดข้อผิดพลาดในการวิเคราะห์ {symbol}\n"
+            f"Error: {str(e)}"
+        )
+
+
+async def start_telegram_bot():
+    """
+    เริ่มต้น Telegram Bot
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        print("⚠️ TELEGRAM_BOT_TOKEN not configured, bot disabled")
+        return
+    
+    print("🤖 Starting Telegram Bot...")
+    
+    # สร้าง Application
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # เพิ่ม Handler
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_symbol_command))
+    
+    # เริ่มต้น Bot
+    await app.initialize()
+    await app.start()
+    
+    print("✅ Telegram Bot is running!")
+    print("   Send a stock symbol (e.g., AAPL) to get analysis")
+    
+    # รัน Bot แบบ polling
+    await app.updater.start_polling()
+    
+    # รอให้ Bot ทำงาน
+    await app.updater.running
+    
 async def main():
     global supabase
     
@@ -2191,5 +2570,13 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+    
+    # ตรวจสอบว่ามี argument หรือไม่
+    if len(sys.argv) > 1 and sys.argv[1] == "--bot":
+        # รัน Bot mode
+        asyncio.run(start_telegram_bot())
+    else:
+        # รัน Stock Collector mode (ปกติ)
+        asyncio.run(main())
   
