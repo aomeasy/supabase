@@ -1,3 +1,5 @@
+#เพิ่ม function
+
 import os
 import asyncio
 import yfinance as yf
@@ -14,6 +16,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_KEY")
 FINNHUB_KEY = os.getenv("FINNHUB_KEY") 
+# Investor Level Configuration 
 
 TELEGRAM_BOT_TOKEN = "8473805508:AAE7FqIeUl_H0vdMuIzfHMld_rIfBSUPpbw"
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # ต้องตั้งค่า Chat ID ใน environment
@@ -1141,7 +1144,306 @@ def get_market_indices_simple():
     except:
         return {'SPY': 0, 'QQQ': 0}
 
+def get_comparative_insights(symbol):
+    """
+    ดึงข้อมูลเปรียบเทียบ: สัปดาห์ที่แล้ว, ค่าเฉลี่ย 30 วัน
+    
+    Returns: {
+        'week_ago_change': float,
+        'avg_30d_score': float,
+        'current_vs_30d': float,
+        'price_52w_high': float,
+        'price_52w_low': float
+    }
+    """
+    try:
+        # 1. ดึงข้อมูล 7 วันที่แล้ว
+        week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+        week_snapshot = supabase.table("stock_snapshots")\
+            .select("price")\
+            .eq("symbol", symbol)\
+            .lte("recorded_at", week_ago)\
+            .order("recorded_at", desc=True)\
+            .limit(1)\
+            .execute()
+        
+        # 2. ดึงข้อมูล 30 วันล่าสุด
+        month_ago = (datetime.now() - timedelta(days=30)).isoformat()
+        month_snapshots = supabase.table("stock_snapshots")\
+            .select("price")\
+            .eq("symbol", symbol)\
+            .gte("recorded_at", month_ago)\
+            .execute()
+        
+        # 3. ดึง Score เฉลี่ย 30 วัน
+        month_predictions = supabase.table("ai_predictions")\
+            .select("overall_score")\
+            .eq("symbol", symbol)\
+            .gte("created_at", month_ago)\
+            .execute()
+        
+        # 4. ดึงข้อมูลปัจจุบัน
+        current_snapshot = supabase.table("stock_snapshots")\
+            .select("price")\
+            .eq("symbol", symbol)\
+            .order("recorded_at", desc=True)\
+            .limit(1)\
+            .execute()
+        
+        current_prediction = supabase.table("ai_predictions")\
+            .select("overall_score")\
+            .eq("symbol", symbol)\
+            .order("created_at", desc=True)\
+            .limit(1)\
+            .execute()
+        
+        # 5. คำนวณค่าต่างๆ
+        result = {
+            'week_ago_change': None,
+            'avg_30d_score': None,
+            'current_vs_30d': None,
+            'price_52w_high': None,
+            'price_52w_low': None
+        }
+        
+        # เปลี่ยนแปลงจากสัปดาห์ที่แล้ว
+        if week_snapshot.data and current_snapshot.data:
+            week_price = week_snapshot.data[0]['price']
+            current_price = current_snapshot.data[0]['price']
+            result['week_ago_change'] = round(((current_price - week_price) / week_price) * 100, 2)
+        
+        # Score เฉลี่ย 30 วัน
+        if month_predictions.data:
+            scores = [p['overall_score'] for p in month_predictions.data if p.get('overall_score')]
+            if scores:
+                result['avg_30d_score'] = round(sum(scores) / len(scores), 1)
+        
+        # เปรียบเทียบ Score ปัจจุบันกับค่าเฉลี่ย
+        if current_prediction.data and result['avg_30d_score']:
+            current_score = current_prediction.data[0]['overall_score']
+            result['current_vs_30d'] = round(current_score - result['avg_30d_score'], 1)
+        
+        # ราคาสูง/ต่ำสุดใน 30 วัน (ใช้แทน 52 สัปดาห์)
+        if month_snapshots.data:
+            prices = [s['price'] for s in month_snapshots.data if s.get('price')]
+            if prices:
+                result['price_52w_high'] = round(max(prices), 2)
+                result['price_52w_low'] = round(min(prices), 2)
+        
+        return result
+        
+    except Exception as e:
+        print(f"⚠️ Error getting comparative insights for {symbol}: {e}")
+        return {
+            'week_ago_change': None,
+            'avg_30d_score': None,
+            'current_vs_30d': None,
+            'price_52w_high': None,
+            'price_52w_low': None
+        }
 
+
+def get_top_movers():
+    """
+    หาหุ้นที่เปลี่ยนแปลงมากที่สุด (ทั้งขึ้นและลง)
+    
+    Returns: {
+        'top_gainers': [...],
+        'top_losers': [...]
+    }
+    """
+    try:
+        # ดึง snapshot ล่าสุดทั้งหมด (ภายใน 15 นาที)
+        cutoff_time = (datetime.now() - timedelta(minutes=15)).isoformat()
+        
+        snapshots = supabase.table("stock_snapshots")\
+            .select("symbol, price, change_pct")\
+            .gte("recorded_at", cutoff_time)\
+            .order("recorded_at", desc=True)\
+            .execute()
+        
+        if not snapshots.data:
+            return {'top_gainers': [], 'top_losers': []}
+        
+        # กรองหุ้นซ้ำ (เอาล่าสุดสุด)
+        unique_stocks = {}
+        for snap in snapshots.data:
+            symbol = snap['symbol']
+            if symbol not in unique_stocks:
+                unique_stocks[symbol] = snap
+        
+        stocks_list = list(unique_stocks.values())
+        
+        # เรียงตาม change_pct
+        sorted_stocks = sorted(stocks_list, key=lambda x: x.get('change_pct', 0), reverse=True)
+        
+        # Top 3 gainers และ losers
+        top_gainers = sorted_stocks[:3]
+        top_losers = sorted_stocks[-3:]
+        top_losers.reverse()  # ให้ลงมากสุดอยู่ก่อน
+        
+        return {
+            'top_gainers': top_gainers,
+            'top_losers': top_losers
+        }
+        
+    except Exception as e:
+        print(f"⚠️ Error getting top movers: {e}")
+        return {'top_gainers': [], 'top_losers': []}
+
+def format_beginner_alert(opportunities, market_data):
+    """
+    Alert สำหรับ Beginner: เน้น DCA + ข้อมูลพื้นฐาน
+    """
+    if not opportunities:
+        return None
+    
+    message = "🌱 <b>มือใหม่เริ่มต้น - โอกาส DCA</b>\n\n"
+    message += "💡 <b>คำแนะนำ:</b> DCA (Dollar Cost Averaging) คือการซื้อเป็นงวดๆ เพื่อลดความเสี่ยง\n\n"
+    
+    for i, opp in enumerate(opportunities[:2], 1):  # แค่ 2 อันดับแรก
+        message += f"{i}️⃣ <b>{opp['symbol']}</b>\n"
+        message += f"   💰 ราคา: ${opp['price']:.2f}\n"
+        message += f"   📉 ลง: {abs(opp['change_pct']):.1f}%\n"
+        message += f"   ⭐ คะแนน: {opp['overall_score']}/100\n"
+        
+        # คำอธิบายง่ายๆ
+        if opp['overall_score'] >= 70:
+            message += f"   ✅ คุณภาพดี เหมาะลงทุนระยะยาว\n"
+        
+        # แนะนำการซื้อ
+        message += f"   💵 แนะนำ: ซื้อ 1/3 ของเงินที่ตั้งไว้\n"
+        message += "\n"
+    
+    message += "📚 <b>เคล็ดลับ:</b>\n"
+    message += "• แบ่งเงินซื้อ 3 ครั้ง ห่างกัน 1-2 สัปดาห์\n"
+    message += "• ไม่ต้องเร่งซื้อทันที รอให้ราคาเสถียร\n"
+    message += "• ถือระยะยาว 6-12 เดือนขึ้นไป\n"
+    
+    return message
+
+
+def format_intermediate_alert(opportunities, market_data):
+    """
+    Alert สำหรับ Intermediate: Technical + Fundamental
+    """
+    if not opportunities:
+        return None
+    
+    message = "📊 <b>นักลงทุนระดับกลาง - การวิเคราะห์เชิง Technical</b>\n\n"
+    
+    # แสดง Market Overview
+    message += f"🌍 <b>ภาพรวมตลาด:</b>\n"
+    message += f"S&P 500: {market_data['SPY']:+.2f}% | NASDAQ: {market_data['QQQ']:+.2f}%\n\n"
+    
+    for i, opp in enumerate(opportunities[:3], 1):
+        message += f"{i}️⃣ <b>{opp['symbol']}</b> ${opp['price']:.2f} ({opp['change_pct']:+.1f}%)\n"
+        
+        # Technical Indicators
+        message += f"   📈 Technical:\n"
+        if opp.get('rsi'):
+            rsi_status = "Oversold" if opp['rsi'] < 30 else "Neutral"
+            message += f"      • RSI: {opp['rsi']:.0f} ({rsi_status})\n"
+        
+        if opp.get('below_ma_pct'):
+            message += f"      • Below MA20: {opp['below_ma_pct']:.1f}%\n"
+        
+        # Score + Risk
+        message += f"   💎 Score: {opp['overall_score']}/100"
+        if opp.get('confidence'):
+            message += f" | Confidence: {opp['confidence']}\n"
+        else:
+            message += "\n"
+        
+        if opp.get('risk_score'):
+            risk_level = "Low" if opp['risk_score'] < 30 else "Medium" if opp['risk_score'] < 60 else "High"
+            message += f"   ⚠️ Risk: {risk_level} ({opp['risk_score']}/100)\n"
+        
+        # Entry Strategy
+        if opp.get('price_target'):
+            upside = ((opp['price_target'] - opp['price']) / opp['price']) * 100
+            message += f"   🎯 Target: ${opp['price_target']:.2f} (+{upside:.1f}%)\n"
+        
+        message += "\n"
+    
+    message += "💡 <b>Strategy:</b> ใช้ Limit Order + Stop Loss ป้องกันความเสี่ยง\n"
+    
+    return message
+
+
+def format_advanced_alert(opportunities, market_data, top_movers):
+    """
+    Alert สำหรับ Advanced: รวม Options flow, Volume analysis, Sector trends
+    """
+    if not opportunities:
+        return None
+    
+    message = "🔥 <b>นักลงทุนขั้นสูง - Advanced Analysis</b>\n\n"
+    
+    # Market Overview with Sentiment
+    avg_change = (market_data['SPY'] + market_data['QQQ']) / 2
+    sentiment = "Bearish 🐻" if avg_change < -1 else "Bullish 🐂" if avg_change > 1 else "Neutral ⚖️"
+    
+    message += f"🌍 <b>Market Sentiment:</b> {sentiment}\n"
+    message += f"SPY: {market_data['SPY']:+.2f}% | QQQ: {market_data['QQQ']:+.2f}%\n\n"
+    
+    # Top Opportunities with detailed metrics
+    message += "🎯 <b>Top Setups:</b>\n\n"
+    
+    for i, opp in enumerate(opportunities[:3], 1):
+        message += f"{i}️⃣ <b>{opp['symbol']}</b> ${opp['price']:.2f} ({opp['change_pct']:+.1f}%)\n"
+        
+        # Multi-factor Score
+        message += f"   📊 Metrics:\n"
+        message += f"      • Overall Score: {opp['overall_score']}/100\n"
+        
+        if opp.get('rsi'):
+            message += f"      • RSI: {opp['rsi']:.0f}"
+            if opp['rsi'] < 30:
+                message += " ⚡ Strong Oversold\n"
+            elif opp['rsi'] < 40:
+                message += " 📉 Oversold\n"
+            else:
+                message += "\n"
+        
+        if opp.get('below_ma_pct'):
+            message += f"      • Distance from MA20: {opp['below_ma_pct']:.1f}%\n"
+        
+        # Risk-Reward Analysis
+        if opp.get('price_target') and opp.get('risk_score'):
+            upside = ((opp['price_target'] - opp['price']) / opp['price']) * 100
+            risk_reward = upside / max(opp['risk_score'], 1) * 10
+            message += f"   💰 Risk/Reward: {risk_reward:.2f}:1\n"
+            message += f"      • Upside: +{upside:.1f}% | Risk: {opp['risk_score']}/100\n"
+        
+        # Entry/Exit Strategy
+        if opp.get('alert_type') == 'Gap Down':
+            message += f"   🎯 Strategy: Wait for bounce confirmation (15-30min)\n"
+        elif opp.get('alert_type') == 'DCA Setup':
+            message += f"   🎯 Strategy: Scale in 2-3 positions, 5-7 days apart\n"
+        
+        message += "\n"
+    
+    # Top Movers Section
+    if top_movers.get('top_gainers') or top_movers.get('top_losers'):
+        message += "📈 <b>Market Movers:</b>\n"
+        
+        if top_movers.get('top_gainers'):
+            message += "🟢 Gainers: "
+            gainers_str = " | ".join([f"{g['symbol']} +{g['change_pct']:.1f}%" 
+                                     for g in top_movers['top_gainers'][:3]])
+            message += gainers_str + "\n"
+        
+        if top_movers.get('top_losers'):
+            message += "🔴 Losers: "
+            losers_str = " | ".join([f"{l['symbol']} {l['change_pct']:.1f}%" 
+                                    for l in top_movers['top_losers'][:3]])
+            message += losers_str + "\n"
+    
+    message += "\n💡 <b>Pro Tip:</b> Monitor unusual volume + check options flow for institutional activity\n"
+    
+    return message
+    
 def get_opportunities_by_type(session_type):
     """
     หาโอกาสตามประเภทช่วงเวลา
@@ -1246,17 +1548,34 @@ def get_opportunities_by_type(session_type):
         return []
 
 
+
 def format_alert_by_session(opportunities, market_data, session_type, session_name):
-    """สร้างข้อความตามช่วงเวลา"""
+    """สร้างข้อความตามช่วงเวลา พร้อม Comparative Insights"""
     
     now = datetime.now()
     
-    # ถ้าไม่มีโอกาส แต่มีการเก็บข้อมูล ให้ส่งสรุปสั้น ๆ
+    # 1. ดึงข้อมูล Top Movers
+    top_movers = get_top_movers()
+    
+    # 2. ถ้าไม่มีโอกาส แต่มีการเก็บข้อมูล ให้ส่งสรุปสั้น ๆ
     if not opportunities:
         message = f"{session_name}\n\n"
         message += f"📊 <b>ภาพรวมตลาด</b>\n"
         message += f"S&P 500: <b>{market_data['SPY']:+.1f}%</b> | "
         message += f"NASDAQ: <b>{market_data['QQQ']:+.1f}%</b>\n\n"
+        
+        # แสดง Top Movers แม้ไม่มีโอกาส
+        if top_movers.get('top_gainers') or top_movers.get('top_losers'):
+            message += "📈 <b>Market Movers:</b>\n"
+            
+            if top_movers.get('top_gainers'):
+                message += "🟢 " + " | ".join([f"{g['symbol']} +{g['change_pct']:.1f}%" 
+                                               for g in top_movers['top_gainers'][:3]]) + "\n"
+            
+            if top_movers.get('top_losers'):
+                message += "🔴 " + " | ".join([f"{l['symbol']} {l['change_pct']:.1f}%" 
+                                              for l in top_movers['top_losers'][:3]]) + "\n"
+            message += "\n"
         
         if session_type == "after_close":
             message += "ℹ️ ไม่มีหุ้นที่ตรงเงื่อนไข DCA วันนี้"
@@ -1266,7 +1585,7 @@ def format_alert_by_session(opportunities, market_data, session_type, session_na
         message += f"\n⏰ {now.strftime('%H:%M น.')}"
         return message
     
-    # มีโอกาส → สร้างข้อความเต็ม
+    # 3. มีโอกาส → สร้างข้อความเต็ม
     message = f"{session_name}\n\n"
     
     # Header ตามช่วงเวลา
@@ -1279,7 +1598,7 @@ def format_alert_by_session(opportunities, market_data, session_type, session_na
     else:
         message += "💎 <b>โอกาส DCA วันนี้</b>\n\n"
     
-    # แสดงหุ้น (3 อันดับแรก)
+    # แสดงหุ้น (3 อันดับแรก) พร้อม Comparative Insights
     for i, opp in enumerate(opportunities[:3], 1):
         message += f"{i}️⃣ <b>{opp['symbol']}</b> ${opp['price']:.2f} "
         message += f"<b>({opp['change_pct']:+.1f}%)</b>\n"
@@ -1289,6 +1608,34 @@ def format_alert_by_session(opportunities, market_data, session_type, session_na
         if opp.get('confidence'):
             message += f" | 🎯 {opp['confidence']}"
         message += "\n"
+        
+        # 🆕 Comparative Insights
+        insights = get_comparative_insights(opp['symbol'])
+        
+        if insights.get('week_ago_change') is not None:
+            week_trend = "📈" if insights['week_ago_change'] > 0 else "📉"
+            message += f"   {week_trend} เทียบ 7 วันก่อน: {insights['week_ago_change']:+.1f}%\n"
+        
+        if insights.get('current_vs_30d') is not None:
+            score_trend = "⬆️" if insights['current_vs_30d'] > 0 else "⬇️"
+            message += f"   {score_trend} Score vs เฉลี่ย 30d: {insights['current_vs_30d']:+.1f} แต้ม\n"
+        
+        if insights.get('price_52w_high') and insights.get('price_52w_low'):
+            current = opp['price']
+            high = insights['price_52w_high']
+            low = insights['price_52w_low']
+            
+            # คำนวณตำแหน่งราคาใน range
+            price_position = ((current - low) / (high - low)) * 100 if high != low else 50
+            
+            message += f"   📊 ช่วง 30d: ${low:.2f} - ${high:.2f} "
+            
+            if price_position < 30:
+                message += "(ใกล้จุดต่ำ 🟢)\n"
+            elif price_position > 70:
+                message += "(ใกล้จุดสูง 🔴)\n"
+            else:
+                message += "(กลางๆ 🟡)\n"
         
         # ข้อมูลเทคนิค
         if opp.get('below_ma_pct'):
@@ -1316,6 +1663,24 @@ def format_alert_by_session(opportunities, market_data, session_type, session_na
         if opp.get('price_target'):
             upside = ((opp['price_target'] - opp['price']) / opp['price']) * 100
             message += f"   🎯 Target: ${opp['price_target']:.2f} (+{upside:.1f}%)\n"
+        
+        message += "\n"
+    
+    # 🆕 แสดง Top Movers ท้ายข้อความ
+    if top_movers.get('top_gainers') or top_movers.get('top_losers'):
+        message += "📊 <b>หุ้นที่เปลี่ยนแปลงมากที่สุดวันนี้:</b>\n"
+        
+        if top_movers.get('top_gainers'):
+            message += "🟢 ขึ้นสูงสุด: "
+            gainers_str = " | ".join([f"{g['symbol']} +{g['change_pct']:.1f}%" 
+                                     for g in top_movers['top_gainers'][:3]])
+            message += gainers_str + "\n"
+        
+        if top_movers.get('top_losers'):
+            message += "🔴 ลงต่ำสุด: "
+            losers_str = " | ".join([f"{l['symbol']} {l['change_pct']:.1f}%" 
+                                    for l in top_movers['top_losers'][:3]])
+            message += losers_str + "\n"
         
         message += "\n"
     
@@ -1348,12 +1713,18 @@ def format_alert_by_session(opportunities, market_data, session_type, session_na
     
     return message
 
+ 
 
-async def send_market_alert_after_collection():
-    """ส่ง Alert หลังเก็บข้อมูลทุกครั้ง - ปรับข้อความตามช่วงเวลา"""
+async def send_market_alert_after_collection(investor_level='intermediate'):
+    """
+    ส่ง Alert หลังเก็บข้อมูลทุกครั้ง - ปรับข้อความตามช่วงเวลาและระดับนักลงทุน
+    
+    investor_level: 'beginner', 'intermediate', 'advanced'
+    """
     
     print(f"\n{'='*60}")
     print("📱 Generating Market Alert...")
+    print(f"   Investor Level: {investor_level.upper()}")
     print(f"{'='*60}\n")
     
     # 1. ระบุช่วงเวลา
@@ -1369,10 +1740,16 @@ async def send_market_alert_after_collection():
     print(f"📊 Market: SPY {market_data['SPY']:+.1f}% | QQQ {market_data['QQQ']:+.1f}%")
     
     # 4. สร้างข้อความ (ส่งเสมอ แม้ไม่มีโอกาส)
-    message = format_alert_by_session(opportunities, market_data, session_type, session_name)
+    message = format_alert_by_session(
+        opportunities, 
+        market_data, 
+        session_type, 
+        session_name,
+        investor_level=investor_level
+    )
     
     if message:
-        print(f"\n📱 Sending alert...")
+        print(f"\n📱 Sending {investor_level} level alert...")
         print("="*60)
         print(message.replace('<b>', '').replace('</b>', ''))
         print("="*60)
@@ -1381,13 +1758,12 @@ async def send_market_alert_after_collection():
         success = await send_telegram_message(message)
         
         if success:
-            print("\n✅ Market alert sent successfully!")
+            print(f"\n✅ Market alert ({investor_level}) sent successfully!")
         else:
             print("\n⚠️ Failed to send alert")
     
     print(f"{'='*60}\n")
-
-
+ 
 async def main():
     global supabase
     
@@ -1794,7 +2170,8 @@ async def main():
     summary_message = format_telegram_summary(stats, len(stocks), start_time)
     await send_telegram_message(summary_message)
 
-    await send_market_alert_after_collection()
+    #await send_market_alert_after_collection()
+    await send_market_alert_after_collection(investor_level=INVESTOR_LEVEL)
 
 
 if __name__ == "__main__":
