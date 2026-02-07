@@ -1084,8 +1084,7 @@ async def main():
                 "ema_50": tech_data.get('ema_50'),
                 "ema_200": tech_data.get('ema_200'),
                 "bb_upper": tech_data.get('bb_upper'),
-                "bb_lower": tech_data.get('bb_lower'),
-                "data_source": tech_data['source']
+                "bb_lower": tech_data.get('bb_lower')
             }
             
             supabase.table("stock_snapshots").insert(snapshot_record).execute()
