@@ -1713,18 +1713,14 @@ def format_alert_by_session(opportunities, market_data, session_type, session_na
     
     return message
 
- 
 
-async def send_market_alert_after_collection(investor_level='intermediate'):
+async def send_market_alert_after_collection():
     """
-    ส่ง Alert หลังเก็บข้อมูลทุกครั้ง - ปรับข้อความตามช่วงเวลาและระดับนักลงทุน
-    
-    investor_level: 'beginner', 'intermediate', 'advanced'
+    ส่ง Alert หลังเก็บข้อมูลทุกครั้ง - ปรับข้อความตามช่วงเวลา
     """
     
     print(f"\n{'='*60}")
     print("📱 Generating Market Alert...")
-    print(f"   Investor Level: {investor_level.upper()}")
     print(f"{'='*60}\n")
     
     # 1. ระบุช่วงเวลา
@@ -1744,12 +1740,11 @@ async def send_market_alert_after_collection(investor_level='intermediate'):
         opportunities, 
         market_data, 
         session_type, 
-        session_name,
-        investor_level=investor_level
+        session_name
     )
     
     if message:
-        print(f"\n📱 Sending {investor_level} level alert...")
+        print(f"\n📱 Sending alert...")
         print("="*60)
         print(message.replace('<b>', '').replace('</b>', ''))
         print("="*60)
@@ -1758,11 +1753,12 @@ async def send_market_alert_after_collection(investor_level='intermediate'):
         success = await send_telegram_message(message)
         
         if success:
-            print(f"\n✅ Market alert ({investor_level}) sent successfully!")
+            print("\n✅ Market alert sent successfully!")
         else:
             print("\n⚠️ Failed to send alert")
     
     print(f"{'='*60}\n")
+  
  
 async def main():
     global supabase
@@ -2171,7 +2167,7 @@ async def main():
     await send_telegram_message(summary_message)
 
     #await send_market_alert_after_collection()
-    await send_market_alert_after_collection(investor_level=INVESTOR_LEVEL)
+    await send_market_alert_after_collection()
 
 
 if __name__ == "__main__":
