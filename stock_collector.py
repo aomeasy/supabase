@@ -1811,7 +1811,7 @@ async def main():
         'sell': 0,
         'high_confidence': 0,
         'medium_confidence': 0,
-        'low_confidence': 0
+        'low_confidence': 0,
         'strong_buy_symbols': [],  # 🆕 เก็บ symbol ของ Strong Buy
         'buy_symbols': []           # 🆕 เก็บ symbol ของ Buy
     }
