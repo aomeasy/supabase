@@ -1063,8 +1063,9 @@ async def send_telegram_message(message):
         return False
 
 
+
 def format_telegram_summary(stats, total_stocks, start_time):
-    """สร้างข้อความสรุปสำหรับ Telegram"""
+    """สร้างข้อความสรุปสำหรับ Telegram พร้อมแสดง Symbol ของ Strong Buy/Buy"""
     
     duration = datetime.now() - start_time
     duration_str = str(duration).split('.')[0]  # ตัด microseconds
@@ -1079,8 +1080,21 @@ def format_telegram_summary(stats, total_stocks, start_time):
 - ⏱ Duration: {duration_str}
 
 📈 <b>Recommendations:</b>
-- 🟢 Strong Buy: {stats['strong_buy']}
-- 🟢 Buy: {stats['buy']}
+- 🟢 Strong Buy: {stats['strong_buy']}"""
+    
+    # แสดง Symbol ของ Strong Buy (ถ้ามี)
+    if stats['strong_buy'] > 0 and stats.get('strong_buy_symbols'):
+        symbols_str = ", ".join(stats['strong_buy_symbols'])
+        message += f" ({symbols_str})"
+    
+    message += f"\n- 🟢 Buy: {stats['buy']}"
+    
+    # แสดง Symbol ของ Buy (ถ้ามี)
+    if stats['buy'] > 0 and stats.get('buy_symbols'):
+        symbols_str = ", ".join(stats['buy_symbols'])
+        message += f" ({symbols_str})"
+    
+    message += f"""
 - 🟡 Hold: {stats['hold']}
 - 🔴 Sell: {stats['sell']}
 """
@@ -1102,7 +1116,7 @@ def format_telegram_summary(stats, total_stocks, start_time):
     message += f"\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     
     return message
-
+ 
 def get_current_session():
     """ระบุช่วงเวลาการซื้อขาย"""
     now_utc = datetime.utcnow()
@@ -1798,6 +1812,8 @@ async def main():
         'high_confidence': 0,
         'medium_confidence': 0,
         'low_confidence': 0
+        'strong_buy_symbols': [],  # 🆕 เก็บ symbol ของ Strong Buy
+        'buy_symbols': []           # 🆕 เก็บ symbol ของ Buy
     }
     
     for idx, stock_data in enumerate(stocks, 1):
@@ -2091,11 +2107,15 @@ async def main():
                 print(f"   ⏰ Horizon: {time_horizon}")
             
             # อัพเดตสถิติ
+     
+
             stats['success'] += 1
             if recommendation == 'Strong Buy':
                 stats['strong_buy'] += 1
+                stats['strong_buy_symbols'].append(symbol)  # 🆕 เก็บ symbol
             elif recommendation == 'Buy':
                 stats['buy'] += 1
+                stats['buy_symbols'].append(symbol)  # 🆕 เก็บ symbol
             elif recommendation == 'Hold':
                 stats['hold'] += 1
             elif recommendation in ['Sell', 'Strong Sell']:
