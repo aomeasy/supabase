@@ -213,7 +213,7 @@ def calculate_actual_outcome(symbol, prediction_date):
         print(f"⚠️ Error calculating actual outcome: {e}")
         return None
 
-
+ 
 def fetch_news_data(symbol):
     """ดึงข่าวล่าสุดจาก Finnhub API และคำนวณ sentiment + แปลภาษาไทย"""
     try:
@@ -246,8 +246,10 @@ def fetch_news_data(symbol):
         
         print(f"📰 Found {len(data)} news articles for {symbol}")
         
-        # 5. เอาแค่ 10 ข่าวล่าสุด
-        news_list = data[:10]
+        # 5. เอาแค่ 20 ข่าวล่าสุด (เพิ่มจาก 10)
+        news_list = data[:20]  # ✅ เปลี่ยนจาก 10 เป็น 20
+
+        
         
         # 6. แปลภาษาไทย
         try:
@@ -1973,6 +1975,7 @@ async def analyze_single_stock(symbol):
             'sentiment_score': final_sentiment,
             'news_count': len(news_records),
             'news_sample': news_records[0] if news_records else None,
+            'news_records': news_records[:3],  # ✅ เพิ่มบรรทัดนี้ - ส่ง 3 ข่าวแรก
             'overall_score': overall_score,
             'risk_score': risk_score,
             'recommendation': recommendation,
@@ -1995,122 +1998,311 @@ async def analyze_single_stock(symbol):
         }
 
 
+
 def format_stock_analysis_message(result):
     """
-    จัดรูปแบบข้อความวิเคราะห์หุ้นสำหรับ Telegram
+    จัดรูปแบบข้อความวิเคราะห์หุ้นสำหรับ Telegram (ภาษาไทย + ละเอียด)
     """
     if not result.get('success'):
-        return result.get('error', '❌ Analysis failed')
+        return result.get('error', '❌ การวิเคราะห์ล้มเหลว')
     
     symbol = result['symbol']
     
-    # Header
-    message = f"📊 <b>Analysis: {symbol}</b>"
+    # ========================================
+    # Header + ราคา
+    # ========================================
+    message = f"📊 <b>การวิเคราะห์: {symbol}</b>"
     if result.get('category'):
-        message += f" ({result['category']})"
+        category_th = {
+            'Core': 'หุ้นหลัก',
+            'Growth': 'หุ้นเติบโต', 
+            'Value': 'หุ้นมูลค่า',
+            'Dividend': 'หุ้นปันผล',
+            'ETF': 'กองทุนรวม',
+            'Momentum': 'หุ้นโมเมนตัม'
+        }
+        cat_display = category_th.get(result['category'], result['category'])
+        message += f" ({cat_display})"
     message += "\n\n"
     
-    # Price & Change
-    message += f"💰 <b>Price:</b> ${result['price']:.2f}"
+    # ราคาและการเปลี่ยนแปลง
+    message += f"💰 <b>ราคาปัจจุบัน:</b> ${result['price']:.2f}"
     if result.get('change_pct') is not None:
-        change_emoji = "🟢" if result['change_pct'] > 0 else "🔴"
-        message += f" {change_emoji} {result['change_pct']:+.2f}%"
+        change = result['change_pct']
+        if change > 0:
+            change_emoji = "🟢"
+            change_text = "เพิ่มขึ้น"
+        elif change < 0:
+            change_emoji = "🔴"
+            change_text = "ลดลง"
+        else:
+            change_emoji = "⚪"
+            change_text = "ไม่เปลี่ยนแปลง"
+        
+        message += f" {change_emoji} {change_text} {abs(change):.2f}%"
     message += "\n\n"
     
-    # Technical Indicators
-    message += "📈 <b>Technical:</b>\n"
+    # ========================================
+    # ตัวชี้วัดทางเทคนิค
+    # ========================================
+    message += "📈 <b>ตัวชี้วัดทางเทคนิค:</b>\n"
     
+    # RSI
     if result.get('rsi'):
-        rsi_status = ""
-        if result['rsi'] < 30:
-            rsi_status = " (Strong Oversold 🟢)"
-        elif result['rsi'] < 40:
-            rsi_status = " (Oversold 🟢)"
-        elif result['rsi'] > 70:
-            rsi_status = " (Overbought 🔴)"
-        message += f"   • RSI: {result['rsi']:.1f}{rsi_status}\n"
+        rsi = result['rsi']
+        message += f"   • RSI (14): {rsi:.1f}"
+        
+        if rsi < 30:
+            message += " → <b>ขายเกิน</b> 🟢 (โอกาสซื้อ)\n"
+        elif rsi < 40:
+            message += " → ขายมาก 🟢\n"
+        elif rsi < 50:
+            message += " → เป็นกลางแนวลง 🟡\n"
+        elif rsi < 60:
+            message += " → เป็นกลางแนวขึ้น 🟡\n"
+        elif rsi < 70:
+            message += " → ซื้อมาก 🟠\n"
+        else:
+            message += " → <b>ซื้อเกิน</b> 🔴 (ระวังปรับฐาน)\n"
     
+    # MACD
     if result.get('macd') and result.get('macd_signal'):
-        macd_signal = "Bullish 🟢" if result['macd'] > result['macd_signal'] else "Bearish 🔴"
-        message += f"   • MACD: {macd_signal}\n"
+        macd = result['macd']
+        signal = result['macd_signal']
+        
+        if macd > signal:
+            message += f"   • MACD: <b>สัญญาณขาขึ้น</b> 🟢 (แนวโน้มดี)\n"
+        else:
+            message += f"   • MACD: <b>สัญญาณขาลง</b> 🔴 (แนวโน้มอ่อนแอ)\n"
     
+    # Upside Potential
     if result.get('upside_pct'):
-        message += f"   • Upside Potential: {result['upside_pct']:+.1f}%\n"
+        upside = result['upside_pct']
+        if upside > 0:
+            message += f"   • โอกาสเพิ่มขึ้น: <b>+{upside:.1f}%</b> 📈\n"
+        else:
+            message += f"   • ระยะห่างจากเป้า: <b>{upside:.1f}%</b> 📉\n"
     
-    # Comparative Insights
+    # ========================================
+    # ข้อมูลเปรียบเทียบ
+    # ========================================
     insights = result.get('insights', {})
-    if insights.get('week_ago_change') is not None:
-        week_emoji = "📈" if insights['week_ago_change'] > 0 else "📉"
-        message += f"   • 7d Change: {week_emoji} {insights['week_ago_change']:+.1f}%\n"
     
-    if insights.get('current_vs_30d') is not None:
-        score_emoji = "⬆️" if insights['current_vs_30d'] > 0 else "⬇️"
-        message += f"   • Score vs 30d Avg: {score_emoji} {insights['current_vs_30d']:+.1f}\n"
-    
-    message += "\n"
-    
-    # AI Analysis
-    message += f"🤖 <b>AI Analysis:</b>\n"
-    message += f"   • Score: {result['overall_score']}/100\n"
-    message += f"   • Recommendation: <b>{result['recommendation']}</b>\n"
-    
-    if result.get('confidence'):
-        message += f"   • Confidence: {result['confidence']}\n"
-    
-    if result.get('risk_score'):
-        risk_level = "Low" if result['risk_score'] < 30 else "Medium" if result['risk_score'] < 60 else "High"
-        message += f"   • Risk: {risk_level} ({result['risk_score']}/100)\n"
-    
-    message += f"   • Reason: {result['reason']}\n"
-    
-    if result.get('price_target'):
-        upside_to_target = ((result['price_target'] - result['price']) / result['price']) * 100
-        message += f"   • Target: ${result['price_target']:.2f} (+{upside_to_target:.1f}%)\n"
-    
-    if result.get('time_horizon'):
-        message += f"   • Time Horizon: {result['time_horizon']}\n"
-    
-    message += "\n"
-    
-    # News
-    if result.get('news_count', 0) > 0:
-        message += f"📰 <b>News:</b> {result['news_count']} articles found\n"
+    if any(insights.values()):
+        message += "\n📊 <b>การเปรียบเทียบ:</b>\n"
         
-        news_sample = result.get('news_sample')
-        if news_sample:
-            title = news_sample.get('title_th') or news_sample.get('title', '')
-            if len(title) > 100:
-                title = title[:100] + "..."
-            message += f"   Latest: {title}\n"
+        # เปลี่ยนแปลง 7 วัน
+        if insights.get('week_ago_change') is not None:
+            week_change = insights['week_ago_change']
+            if week_change > 0:
+                message += f"   • 7 วันที่แล้ว: 📈 เพิ่มขึ้น <b>+{week_change:.1f}%</b>\n"
+            else:
+                message += f"   • 7 วันที่แล้ว: 📉 ลดลง <b>{week_change:.1f}%</b>\n"
+        
+        # Score เทียบค่าเฉลี่ย
+        if insights.get('current_vs_30d') is not None:
+            score_diff = insights['current_vs_30d']
+            if score_diff > 0:
+                message += f"   • คะแนนวันนี้ vs เฉลี่ย 30 วัน: ⬆️ สูงกว่า <b>+{score_diff:.1f}</b> แต้ม\n"
+            else:
+                message += f"   • คะแนนวันนี้ vs เฉลี่ย 30 วัน: ⬇️ ต่ำกว่า <b>{score_diff:.1f}</b> แต้ม\n"
+        
+        # ช่วงราคา 30 วัน
+        if insights.get('price_52w_high') and insights.get('price_52w_low'):
+            high = insights['price_52w_high']
+            low = insights['price_52w_low']
+            current = result['price']
             
-            if news_sample.get('sentiment_score'):
-                sent_emoji = "🟢" if news_sample['sentiment_score'] > 0 else "🔴" if news_sample['sentiment_score'] < 0 else "🟡"
-                message += f"   Sentiment: {sent_emoji} {news_sample['sentiment_score']:.2f}\n"
-        
-        message += "\n"
+            # คำนวณตำแหน่ง
+            if high != low:
+                position = ((current - low) / (high - low)) * 100
+            else:
+                position = 50
+            
+            message += f"   • ช่วงราคา 30 วัน: ${low:.2f} - ${high:.2f} "
+            
+            if position < 30:
+                message += "→ ใกล้จุดต่ำสุด 🟢\n"
+            elif position > 70:
+                message += "→ ใกล้จุดสูงสุด 🔴\n"
+            else:
+                message += "→ กลางช่วง 🟡\n"
     
-    # Fundamental (ถ้ามี)
+    # ========================================
+    # การวิเคราะห์ของ AI
+    # ========================================
+    message += "\n🤖 <b>การวิเคราะห์จาก AI:</b>\n"
+    message += f"   • คะแนนรวม: <b>{result['overall_score']}/100</b>\n"
+    
+    # คำแนะนำ
+    rec = result['recommendation']
+    rec_th = {
+        'Strong Buy': '🟢 <b>แนะนำซื้อเข้ม</b>',
+        'Buy': '🟢 แนะนำซื้อ',
+        'Hold': '🟡 แนะนำถือ',
+        'Sell': '🔴 แนะนำขาย',
+        'Strong Sell': '🔴 <b>แนะนำขายเร่งด่วน</b>'
+    }
+    message += f"   • คำแนะนำ: {rec_th.get(rec, rec)}\n"
+    
+    # Confidence
+    if result.get('confidence'):
+        conf = result['confidence']
+        conf_th = {
+            'High': '🔥 สูง',
+            'Medium': '📊 ปานกลาง',
+            'Low': '⚠️ ต่ำ'
+        }
+        message += f"   • ความมั่นใจ: {conf_th.get(conf, conf)}\n"
+    
+    # ความเสี่ยง
+    if result.get('risk_score'):
+        risk = result['risk_score']
+        if risk < 30:
+            risk_level = "ต่ำ 🟢"
+        elif risk < 60:
+            risk_level = "ปานกลาง 🟡"
+        else:
+            risk_level = "สูง 🔴"
+        message += f"   • ระดับความเสี่ยง: {risk_level} ({risk}/100)\n"
+    
+    # เหตุผล
+    reason = result['reason']
+    reason_th = {
+        'Excellent signals with high risk': 'สัญญาณดีเยี่ยม แต่มีความเสี่ยงสูง',
+        'Excellent signals with medium risk': 'สัญญาณดีเยี่ยม ความเสี่ยงปานกลาง',
+        'Excellent signals with low risk': 'สัญญาณดีเยี่ยม ความเสี่ยงต่ำ',
+        'Good score but high risk': 'คะแนนดี แต่ความเสี่ยงสูง',
+        'Positive momentum with high risk': 'โมเมนตัมดี แต่มีความเสี่ยงสูง',
+        'Positive momentum with medium risk': 'โมเมนตัมดี ความเสี่ยงปานกลาง',
+        'Positive momentum with low risk': 'โมเมนตัมดี ความเสี่ยงต่ำ',
+        'Wait for clearer signals': 'รอสัญญาณที่ชัดเจนกว่านี้',
+        'Weak performance, consider reducing position': 'ผลงานอ่อนแอ พิจารณาลดสัดส่วน',
+        'Poor metrics across the board': 'ตัวชี้วัดทุกด้านอ่อนแอ'
+    }
+    message += f"   • เหตุผล: {reason_th.get(reason, reason)}\n"
+    
+    # ราคาเป้าหมาย
+    if result.get('price_target'):
+        target = result['price_target']
+        upside_to_target = ((target - result['price']) / result['price']) * 100
+        message += f"   • ราคาเป้าหมาย: ${target:.2f} (+{upside_to_target:.1f}%)\n"
+    
+    # ระยะเวลา
+    if result.get('time_horizon'):
+        horizon = result['time_horizon']
+        horizon_th = {
+            '3-6 months': '3-6 เดือน',
+            '6-12 months': '6-12 เดือน',
+            '6 months': '6 เดือน'
+        }
+        message += f"   • ระยะเวลาลงทุนแนะนำ: {horizon_th.get(horizon, horizon)}\n"
+    
+    # ========================================
+    # ข่าวสาร (แสดง 3 ข่าวแรก)
+    # ========================================
+    if result.get('news_count', 0) > 0:
+        message += f"\n📰 <b>ข่าวล่าสุด:</b> (พบ {result['news_count']} ข่าว)\n"
+        
+        # ใช้ข้อมูล news_records ถ้ามี (ต้องส่งมาจาก analyze_single_stock)
+        news_list = result.get('news_records', [])
+        
+        if not news_list and result.get('news_sample'):
+            news_list = [result['news_sample']]
+        
+        # แสดงสูงสุด 3 ข่าว
+        for i, news in enumerate(news_list[:3], 1):
+            title = news.get('title_th') or news.get('title', '')
+            if len(title) > 80:
+                title = title[:80] + "..."
+            
+            message += f"\n   {i}. {title}\n"
+            
+            # แสดง sentiment ของแต่ละข่าว
+            if news.get('sentiment_score') is not None:
+                sent_score = news['sentiment_score']
+                if sent_score > 0.3:
+                    sent_emoji = "🟢 บวก"
+                elif sent_score < -0.3:
+                    sent_emoji = "🔴 ลบ"
+                else:
+                    sent_emoji = "🟡 กลางๆ"
+                
+                message += f"      ความรู้สึก: {sent_emoji} ({sent_score:.2f})\n"
+            
+            # แสดงแหล่งข่าว
+            if news.get('source'):
+                message += f"      แหล่งที่มา: {news['source']}\n"
+        
+        if result['news_count'] > 3:
+            message += f"\n   ... และอีก {result['news_count'] - 3} ข่าว\n"
+    
+    # ========================================
+    # ข้อมูลพื้นฐาน
+    # ========================================
     fundamental = result.get('fundamental')
     if fundamental and any(fundamental.values()):
-        message += "💼 <b>Fundamental:</b>\n"
+        message += "\n💼 <b>ข้อมูลพื้นฐาน:</b>\n"
         
         if fundamental.get('pe_ratio'):
-            message += f"   • P/E Ratio: {fundamental['pe_ratio']:.2f}\n"
+            pe = fundamental['pe_ratio']
+            message += f"   • P/E Ratio: {pe:.2f}"
+            if pe < 15:
+                message += " → ถูก 🟢\n"
+            elif pe < 25:
+                message += " → พอดี 🟡\n"
+            else:
+                message += " → แพง 🔴\n"
         
         if fundamental.get('peg_ratio'):
-            message += f"   • PEG Ratio: {fundamental['peg_ratio']:.2f}\n"
+            peg = fundamental['peg_ratio']
+            message += f"   • PEG Ratio: {peg:.2f}"
+            if peg < 1:
+                message += " → คุ้มค่า 🟢\n"
+            elif peg < 2:
+                message += " → ปานกลาง 🟡\n"
+            else:
+                message += " → แพง 🔴\n"
         
         if fundamental.get('eps_growth_pct'):
-            message += f"   • EPS Growth: {fundamental['eps_growth_pct']:.1f}%\n"
+            eps_growth = fundamental['eps_growth_pct']
+            message += f"   • การเติบโตของกำไร: {eps_growth:.1f}%"
+            if eps_growth > 20:
+                message += " 🚀\n"
+            elif eps_growth > 10:
+                message += " 📈\n"
+            elif eps_growth > 0:
+                message += " 📊\n"
+            else:
+                message += " 📉\n"
         
         if result.get('market_cap'):
             mc = result['market_cap']
-            mc_str = f"${mc/1e9:.1f}B" if mc >= 1e9 else f"${mc/1e6:.1f}M"
-            message += f"   • Market Cap: {mc_str}\n"
+            if mc >= 1e12:
+                mc_str = f"${mc/1e12:.2f}T"
+                mc_type = "(บริษัทขนาดใหญ่มาก)"
+            elif mc >= 1e11:
+                mc_str = f"${mc/1e9:.1f}B"
+                mc_type = "(บริษัทขนาดใหญ่)"
+            elif mc >= 1e10:
+                mc_str = f"${mc/1e9:.1f}B"
+                mc_type = "(บริษัทขนาดกลาง-ใหญ่)"
+            elif mc >= 1e9:
+                mc_str = f"${mc/1e9:.1f}B"
+                mc_type = "(บริษัทขนาดกลาง)"
+            else:
+                mc_str = f"${mc/1e6:.1f}M"
+                mc_type = "(บริษัทขนาดเล็ก)"
+            
+            message += f"   • มูลค่าตลาด: {mc_str} {mc_type}\n"
     
-    message += f"\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    # ========================================
+    # Footer
+    # ========================================
+    message += f"\n⏰ {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
     
     return message
+ 
 
 
 async def handle_symbol_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
