@@ -1,0 +1,32 @@
+name: Telegram Bot
+
+on:
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180  # 3 hours max
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install python-telegram-bot --upgrade
+        pip install yfinance pandas talib supabase requests deep-translator
+    
+    - name: Run Bot
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
+        TWELVE_DATA_KEY: ${{ secrets.TWELVE_DATA_KEY }}
+      run: |
+        python stock_collector.py --bot
