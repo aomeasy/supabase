@@ -457,30 +457,53 @@ def fetch_fundamental_data(symbol):
         print(f"⚠️ Cannot fetch fundamental data for {symbol}: {e}")
         return {}
 
+
 def calculate_technical_indicators(df):
-    """คำนวณค่าเทคนิคด้วย pandas-ta"""
+    """คำนวณค่าเทคนิคด้วย ta library"""
     try:
         if len(df) < 200:
             return None
         
+        # Import ta library
+        from ta.momentum import RSIIndicator
+        from ta.trend import MACD, EMAIndicator
+        from ta.volatility import BollingerBands
+        
         # คำนวณ indicators
-        df['rsi'] = ta.rsi(df['Close'], length=14)
+        # RSI
+        rsi_indicator = RSIIndicator(close=df['Close'], window=14)
+        df['rsi'] = rsi_indicator.rsi()
         
-        macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
-        df['macd'] = macd['MACD_12_26_9']
-        df['macd_signal'] = macd['MACDs_12_26_9']
+        # MACD
+        macd_indicator = MACD(
+            close=df['Close'],
+            window_slow=26,
+            window_fast=12,
+            window_sign=9
+        )
+        df['macd'] = macd_indicator.macd()
+        df['macd_signal'] = macd_indicator.macd_signal()
         
-        df['ema_20'] = ta.ema(df['Close'], length=20)
-        df['ema_50'] = ta.ema(df['Close'], length=50)
-        df['ema_200'] = ta.ema(df['Close'], length=200)
+        # EMA
+        ema_20 = EMAIndicator(close=df['Close'], window=20)
+        df['ema_20'] = ema_20.ema_indicator()
         
-        bbands = ta.bbands(df['Close'], length=20, std=2)
-        df['bb_upper'] = bbands['BBU_20_2.0']
-        df['bb_lower'] = bbands['BBL_20_2.0']
+        ema_50 = EMAIndicator(close=df['Close'], window=50)
+        df['ema_50'] = ema_50.ema_indicator()
+        
+        ema_200 = EMAIndicator(close=df['Close'], window=200)
+        df['ema_200'] = ema_200.ema_indicator()
+        
+        # Bollinger Bands
+        bb_indicator = BollingerBands(close=df['Close'], window=20, window_dev=2)
+        df['bb_upper'] = bb_indicator.bollinger_hband()
+        df['bb_lower'] = bb_indicator.bollinger_lband()
         
         # ดึงค่าล่าสุด
+        close = df['Close'].values
+        
         return {
-            "price": float(df['Close'].iloc[-1]),
+            "price": float(close[-1]),
             "rsi": float(df['rsi'].iloc[-1]) if pd.notna(df['rsi'].iloc[-1]) else None,
             "macd": float(df['macd'].iloc[-1]) if pd.notna(df['macd'].iloc[-1]) else None,
             "macd_signal": float(df['macd_signal'].iloc[-1]) if pd.notna(df['macd_signal'].iloc[-1]) else None,
@@ -490,9 +513,13 @@ def calculate_technical_indicators(df):
             "bb_upper": float(df['bb_upper'].iloc[-1]) if pd.notna(df['bb_upper'].iloc[-1]) else None,
             "bb_lower": float(df['bb_lower'].iloc[-1]) if pd.notna(df['bb_lower'].iloc[-1]) else None
         }
+        
     except Exception as e:
         print(f"❌ Error calculating indicators: {e}")
+        import traceback
+        traceback.print_exc()
         return None
+         
          
 
 def calculate_upside_pct(current_price, ema_200, ema_50=None):
