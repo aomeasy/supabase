@@ -4,6 +4,7 @@ pandas
 ta-lib
 requests
 pandas-ta 
+ta                 
 python-dotenv 
 google-generativeai
 groq>=0.4.0
