@@ -2087,96 +2087,142 @@ def format_stock_analysis_message(result):
 
 async def handle_symbol_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle เมื่อ user ส่ง symbol มา - เพิ่ม Error Handling
+    Handle เมื่อ user ส่ง symbol มา - เพิ่ม Detailed Logging
     """
+    user = None
+    loading_msg = None
+    symbol = None
+    
     try:
-        # 🆕 เพิ่ม: Log ว่ามีคนส่งข้อความเข้ามา
+        # 1. ดึงข้อมูล User
         user = update.effective_user
+        user_id = user.id
+        username = user.username or user.first_name
         user_message = update.message.text.strip().upper()
         
+        # 🆕 Detailed Log
         print(f"\n{'='*60}")
-        print(f"📱 Received message from {user.username or user.first_name} (ID: {user.id})")
-        print(f"💬 Message: {user_message}")
+        print(f"📨 NEW MESSAGE RECEIVED")
+        print(f"{'='*60}")
+        print(f"👤 User: {username}")
+        print(f"🆔 User ID: {user_id}")
+        print(f"💬 Message: '{user_message}'")
+        print(f"📏 Length: {len(user_message)} chars")
+        print(f"🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'='*60}")
         
-        # ตรวจสอบว่าเป็น symbol (1-5 ตัวอักษร)
-        if not user_message or len(user_message) > 5 or not user_message.isalpha():
-            print(f"⚠️ Invalid symbol format: {user_message}")
+        # 2. Validate Input
+        if not user_message:
+            print("⚠️ VALIDATION FAILED: Empty message")
+            await update.message.reply_text("❌ กรุณาส่งข้อความ")
+            return
+        
+        if len(user_message) > 5:
+            print(f"⚠️ VALIDATION FAILED: Too long ({len(user_message)} chars)")
             await update.message.reply_text(
-                "❌ กรุณาส่ง Stock Symbol ที่ถูกต้อง\n"
+                "❌ Stock Symbol ต้องมีความยาว 1-5 ตัวอักษร\n"
+                "ตัวอย่าง: AAPL, MSFT, GOOGL"
+            )
+            return
+        
+        if not user_message.isalpha():
+            print(f"⚠️ VALIDATION FAILED: Contains non-alpha chars")
+            await update.message.reply_text(
+                "❌ Stock Symbol ต้องเป็นตัวอักษรเท่านั้น\n"
                 "ตัวอย่าง: AAPL, MSFT, GOOGL"
             )
             return
         
         symbol = user_message
-        print(f"✅ Valid symbol detected: {symbol}")
+        print(f"✅ VALIDATION PASSED: '{symbol}'")
         
-        # ส่งข้อความ Loading
+        # 3. Send Loading Message
         try:
+            print(f"📤 Sending loading message...")
             loading_msg = await update.message.reply_text(
-                f"🔍 กำลังวิเคราะห์ {symbol}...\n"
-                "⏳ โปรดรอสักครู่"
+                f"🔍 กำลังวิเคราะห์ <b>{symbol}</b>...\n"
+                "⏳ โปรดรอสักครู่ (10-30 วินาที)",
+                parse_mode='HTML'
             )
-            print(f"✅ Loading message sent")
-        except Exception as load_error:
-            print(f"❌ Failed to send loading message: {load_error}")
-            # พยายามส่งข้อความธรรมดา
-            await update.message.reply_text(f"🔍 กำลังวิเคราะห์ {symbol}...")
+            print(f"✅ Loading message sent (ID: {loading_msg.message_id})")
+        except Exception as load_err:
+            print(f"⚠️ Failed to send loading message: {load_err}")
             loading_msg = None
         
-        # 🆕 เพิ่ม: Timeout protection
+        # 4. Analyze Stock
+        print(f"\n🔬 STARTING ANALYSIS")
+        print(f"   Symbol: {symbol}")
+        print(f"   Timeout: 90 seconds")
+        print(f"{'─'*60}")
+        
         try:
-            print(f"🔄 Starting analysis for {symbol}...")
-            
-            # วิเคราะห์หุ้นพร้อม timeout
             result = await asyncio.wait_for(
                 analyze_single_stock(symbol),
-                timeout=60.0  # timeout 60 วินาที
+                timeout=90.0
             )
             
-            print(f"✅ Analysis completed for {symbol}")
+            print(f"{'─'*60}")
+            print(f"✅ ANALYSIS COMPLETED")
+            print(f"   Success: {result.get('success', False)}")
             
         except asyncio.TimeoutError:
-            error_msg = f"⏱️ การวิเคราะห์ {symbol} ใช้เวลานานเกินไป\nกรุณาลองใหม่อีกครั้ง"
-            print(f"❌ Timeout for {symbol}")
+            print(f"❌ TIMEOUT ERROR (90s exceeded)")
+            
+            error_msg = (
+                f"⏱️ การวิเคราะห์ <b>{symbol}</b> ใช้เวลานานเกินไป\n\n"
+                f"💡 กรุณาลองใหม่อีกครั้ง"
+            )
             
             if loading_msg:
-                await loading_msg.edit_text(error_msg)
+                await loading_msg.edit_text(error_msg, parse_mode='HTML')
             else:
-                await update.message.reply_text(error_msg)
+                await update.message.reply_text(error_msg, parse_mode='HTML')
             return
             
-        except Exception as analysis_error:
-            error_msg = f"❌ เกิดข้อผิดพลาดในการวิเคราะห์ {symbol}\n\nError: {str(analysis_error)}"
-            print(f"❌ Analysis error for {symbol}: {analysis_error}")
+        except Exception as analysis_err:
+            print(f"❌ ANALYSIS ERROR:")
+            print(f"   Error: {analysis_err}")
+            
             import traceback
             traceback.print_exc()
             
+            error_msg = (
+                f"❌ ไม่สามารถวิเคราะห์ <b>{symbol}</b> ได้\n\n"
+                f"<i>Error: {str(analysis_err)[:100]}</i>"
+            )
+            
             if loading_msg:
-                await loading_msg.edit_text(error_msg)
+                await loading_msg.edit_text(error_msg, parse_mode='HTML')
             else:
-                await update.message.reply_text(error_msg)
+                await update.message.reply_text(error_msg, parse_mode='HTML')
             return
         
-        # ตรวจสอบผลลัพธ์
+        # 5. Check Result
         if not result or not result.get('success'):
-            error_msg = result.get('error', f"❌ ไม่สามารถวิเคราะห์ {symbol} ได้")
-            print(f"⚠️ Analysis failed: {error_msg}")
+            error_detail = result.get('error', 'Unknown error') if result else 'No result'
+            print(f"⚠️ ANALYSIS FAILED: {error_detail}")
+            
+            error_msg = (
+                f"❌ ไม่สามารถดึงข้อมูล <b>{symbol}</b> ได้\n\n"
+                f"💡 ตรวจสอบว่า symbol ถูกต้อง"
+            )
             
             if loading_msg:
-                await loading_msg.edit_text(error_msg)
+                await loading_msg.edit_text(error_msg, parse_mode='HTML')
             else:
-                await update.message.reply_text(error_msg)
+                await update.message.reply_text(error_msg, parse_mode='HTML')
             return
         
-        # สร้างข้อความ
+        # 6. Format Message
         try:
-            print(f"📝 Formatting response for {symbol}...")
+            print(f"📝 Formatting message...")
             response = format_stock_analysis_message(result)
-            print(f"✅ Response formatted ({len(response)} chars)")
-        except Exception as format_error:
-            error_msg = f"❌ ไม่สามารถจัดรูปแบบข้อมูลได้\n\nError: {str(format_error)}"
-            print(f"❌ Format error: {format_error}")
+            print(f"✅ Message formatted ({len(response)} chars)")
+            
+        except Exception as format_err:
+            print(f"❌ FORMAT ERROR: {format_err}")
+            
+            error_msg = f"❌ ไม่สามารถจัดรูปแบบข้อมูลได้"
             
             if loading_msg:
                 await loading_msg.edit_text(error_msg)
@@ -2184,81 +2230,106 @@ async def handle_symbol_command(update: Update, context: ContextTypes.DEFAULT_TY
                 await update.message.reply_text(error_msg)
             return
         
-        # ส่งผลลัพธ์
+        # 7. Send Response
         try:
-            print(f"📤 Sending response for {symbol}...")
+            print(f"📤 Sending response...")
             
             if loading_msg:
                 await loading_msg.edit_text(response, parse_mode='HTML')
             else:
                 await update.message.reply_text(response, parse_mode='HTML')
             
-            print(f"✅ Response sent successfully for {symbol}")
+            print(f"✅ RESPONSE SENT SUCCESSFULLY")
             print(f"{'='*60}\n")
             
-        except Exception as send_error:
-            print(f"❌ Failed to send response: {send_error}")
+        except Exception as send_err:
+            print(f"❌ SEND ERROR: {send_err}")
             
-            # ถ้าส่งแบบ HTML ไม่ได้ ลองส่งแบบธรรมดา
+            # Try plain text
             try:
-                plain_response = response.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', '')
+                plain = response.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', '')
+                
                 if loading_msg:
-                    await loading_msg.edit_text(plain_response)
+                    await loading_msg.edit_text(plain)
                 else:
-                    await update.message.reply_text(plain_response)
-                print(f"✅ Plain text response sent")
-            except Exception as plain_error:
-                print(f"❌ Even plain text failed: {plain_error}")
+                    await update.message.reply_text(plain)
+                    
+                print(f"✅ Plain text sent")
+                
+            except Exception as plain_err:
+                print(f"❌ Even plain text failed: {plain_err}")
                 await update.message.reply_text(f"❌ เกิดข้อผิดพลาดในการส่งข้อมูล")
         
     except Exception as e:
-        # 🆕 Catch-all error handler
-        print(f"❌ Unexpected error in handle_symbol_command: {e}")
+        print(f"\n❌ UNEXPECTED ERROR in handle_symbol_command:")
+        print(f"   Symbol: {symbol}")
+        print(f"   User: {username if user else 'Unknown'}")
+        print(f"   Error: {e}")
+        
         import traceback
         traceback.print_exc()
         
         try:
-            await update.message.reply_text(
-                f"❌ เกิดข้อผิดพลาดที่ไม่คาดคิด\n"
-                f"Error: {str(e)}\n\n"
-                f"กรุณาติดต่อผู้ดูแลระบบ"
+            error_msg = (
+                f"❌ เกิดข้อผิดพลาดที่ไม่คาดคิด\n\n"
+                f"กรุณาลองใหม่อีกครั้ง"
             )
+            
+            if loading_msg:
+                await loading_msg.edit_text(error_msg)
+            else:
+                await update.message.reply_text(error_msg)
         except:
-            print(f"❌ Cannot even send error message")
+            print("❌ Cannot send error message to user")
 
 
 async def start_telegram_bot():
     """
-    เริ่มต้น Telegram Bot - เพิ่ม Error Handling
+    เริ่มต้น Telegram Bot - เพิ่ม Detailed Logging
     """
     if not TELEGRAM_BOT_TOKEN:
         print("⚠️ TELEGRAM_BOT_TOKEN not configured, bot disabled")
         return
     
     print(f"\n{'='*60}")
-    print("🤖 Starting Telegram Bot...")
+    print("🤖 Starting Telegram Bot (Polling Mode)")
+    print(f"   Token: {TELEGRAM_BOT_TOKEN[:20]}...")  # 🆕 Debug token
     print(f"{'='*60}\n")
     
     try:
-        # สร้าง Application
+        # 1. สร้าง Application
         print("📱 Creating Telegram Application...")
         app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        print("✅ Application created")
+        print("✅ Application created successfully")
         
-        # 🆕 เพิ่ม: /start command handler
+        # 2. 🆕 Command Handlers พร้อม Logging
         async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """Handle /start command"""
+            user = update.effective_user
+            user_id = user.id
+            username = user.username or user.first_name
+            
+            print(f"\n🎯 /start command")
+            print(f"   User: {username} (ID: {user_id})")
+            print(f"   Time: {datetime.now().strftime('%H:%M:%S')}")
+            
             await update.message.reply_text(
                 "👋 สวัสดีครับ!\n\n"
                 "📊 ส่ง Stock Symbol มาเพื่อดูการวิเคราะห์\n"
                 "ตัวอย่าง: AAPL, MSFT, GOOGL\n\n"
                 "ℹ️ รองรับหุ้นสหรัฐฯ ทุกตัวที่มีในระบบ"
             )
-            print(f"✅ /start command from user {update.effective_user.id}")
-        
-        # 🆕 เพิ่ม: /help command handler
+            print(f"✅ /start response sent to {username}")
+
         async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """Handle /help command"""
+            user = update.effective_user
+            user_id = user.id
+            username = user.username or user.first_name
+            
+            print(f"\n🎯 /help command")
+            print(f"   User: {username} (ID: {user_id})")
+            
             await update.message.reply_text(
                 "📖 <b>วิธีใช้งาน:</b>\n\n"
                 "1️⃣ ส่ง Stock Symbol (เช่น AAPL)\n"
@@ -2272,35 +2343,59 @@ async def start_telegram_bot():
                 "• NVDA - NVIDIA",
                 parse_mode='HTML'
             )
-            print(f"✅ /help command from user {update.effective_user.id}")
+            print(f"✅ /help response sent to {username}")
+
+
+        async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            """Handle /status command"""
+            user = update.effective_user
+            username = user.username or user.first_name
+            
+            print(f"\n🎯 /status command from {username}")
+            
+            await update.message.reply_text(
+                f"🤖 <b>Bot Status</b>\n\n"
+                f"✅ Online and Running\n"
+                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                f"💡 Ready to analyze stocks!",
+                parse_mode='HTML'
+            )
+            print(f"✅ /status response sent")
         
-        # เพิ่ม Command Handlers
+        # 3. Register Command Handlers
         from telegram.ext import CommandHandler
         app.add_handler(CommandHandler("start", start_command))
         app.add_handler(CommandHandler("help", help_command))
-        print("✅ Command handlers added (/start, /help)")
+        app.add_handler(CommandHandler("status", status_command))
+        print("✅ Command handlers registered: /start, /help, /status")
         
-        # เพิ่ม Message Handler
+        # 4. 🆕 Register Message Handler พร้อม Debug
+        print("📝 Registering message handler...")
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_symbol_command))
-        print("✅ Message handler added")
-        
-        # 🆕 เพิ่ม: Error handler
+        print("✅ Message handler registered (TEXT & ~COMMAND)")
+
+
         async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """Handle errors"""
-            print(f"❌ Update {update} caused error {context.error}")
+            print(f"\n❌ ERROR OCCURRED")
+            print(f"   Update: {update}")
+            print(f"   Error: {context.error}")
+            
+            import traceback
+            traceback.print_exc()
             
             if update and update.effective_message:
                 try:
                     await update.effective_message.reply_text(
                         "❌ เกิดข้อผิดพลาดในระบบ\nกรุณาลองใหม่อีกครั้ง"
                     )
-                except:
-                    pass
+                except Exception as e:
+                    print(f"   Cannot send error message: {e}")
         
         app.add_error_handler(error_handler)
-        print("✅ Error handler added")
+        print("✅ Error handler registered")
         
-        # เริ่มต้น Bot
+        # 6. Initialize & Start
         print("\n🔄 Initializing bot...")
         await app.initialize()
         print("✅ Bot initialized")
@@ -2309,36 +2404,55 @@ async def start_telegram_bot():
         await app.start()
         print("✅ Bot started")
         
+        # 7. 🆕 Start Polling พร้อม Parameters ที่ชัดเจน
+        print("\n🔄 Starting polling...")
+        print("   Settings:")
+        print("   - Poll interval: 1.0 seconds")
+        print("   - Allowed updates: ALL_TYPES")
+        print("   - Drop pending: True")
+        
+        await app.updater.start_polling(
+            poll_interval=1.0,
+            timeout=10,
+            bootstrap_retries=-1,  # 🆕 Retry forever
+            read_timeout=2,
+            write_timeout=None,
+            connect_timeout=None,
+            pool_timeout=None,
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
+        
         print("\n" + "="*60)
-        print("🎉 Telegram Bot is now RUNNING!")
+        print("🎉 BOT IS NOW RUNNING!")
         print("="*60)
-        print("📱 Send a stock symbol to get analysis")
-        print("💡 Commands: /start, /help")
+        print("📱 Waiting for messages...")
+        print("💡 Commands: /start, /help, /status")
+        print("📊 Send stock symbol (e.g., AAPL)")
         print("⏹️  Press Ctrl+C to stop")
         print("="*60 + "\n")
         
-        # รัน Bot แบบ polling
-        print("🔄 Starting polling...")
-        await app.updater.start_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True  # 🆕 ละทิ้งข้อความเก่าที่ค้าง
-        )
-        print("✅ Polling started")
-        
-        # รอให้ Bot ทำงาน
-        print("⏳ Bot is listening for messages...\n")
-        
-        # 🆕 เพิ่ม: Keep alive loop with status
+        # 8. 🆕 Keep Alive Loop พร้อม Status Updates
         import time
         last_status = time.time()
+        message_count = 0
         
+        async def print_status():
+            """พิมพ์สถานะทุก 60 วินาที"""
+            nonlocal last_status
+            current_time = time.time()
+            
+            if current_time - last_status >= 60:
+                uptime = current_time - last_status
+                print(f"\n💚 Bot Alive - {datetime.now().strftime('%H:%M:%S')}")
+                print(f"   Uptime: {int(uptime)} seconds")
+                print(f"   Messages handled: {message_count}\n")
+                last_status = current_time
+        
+        # Keep running
         while True:
             await asyncio.sleep(1)
-            
-            # แสดงสถานะทุก 60 วินาที
-            if time.time() - last_status > 60:
-                print(f"💚 Bot is alive at {datetime.now().strftime('%H:%M:%S')}")
-                last_status = time.time()
+            await print_status()
         
     except KeyboardInterrupt:
         print("\n\n⏹️  Shutting down bot...")
@@ -2348,10 +2462,12 @@ async def start_telegram_bot():
         print("✅ Bot stopped gracefully")
         
     except Exception as e:
-        print(f"\n❌ Critical error starting bot: {e}")
+        print(f"\n❌ CRITICAL ERROR in start_telegram_bot:")
+        print(f"   {e}")
         import traceback
         traceback.print_exc()
         raise
+
 
 
 async def main():
@@ -2771,39 +2887,66 @@ async def main():
 
 
  
-
-# 🆕 เพิ่ม: ปรับ main() ให้รองรับ --bot ได้ดีขึ้น
 if __name__ == "__main__":
     import sys
     
     print(f"\n{'='*60}")
     print("🚀 Stock Analysis Bot & Collector")
+    print(f"   Version: 2.0")
+    print(f"   Python: {sys.version.split()[0]}")
     print(f"{'='*60}\n")
     
-    # ตรวจสอบว่ามี argument หรือไม่
-    if len(sys.argv) > 1 and sys.argv[1] == "--bot":
-        # รัน Bot mode
-        print("🤖 Mode: Telegram Bot")
-        print("="*60 + "\n")
-        
-        try:
+    # 🆕 Debug: แสดง Environment Variables
+    print("🔧 Configuration Check:")
+    print(f"   TELEGRAM_BOT_TOKEN: {'✅ Set' if TELEGRAM_BOT_TOKEN else '❌ Missing'}")
+    print(f"   TELEGRAM_CHAT_ID: {'✅ Set' if TELEGRAM_CHAT_ID else '⚠️ Not set (OK for bot)'}")
+    print(f"   SUPABASE_URL: {'✅ Set' if SUPABASE_URL else '❌ Missing'}")
+    print(f"   SUPABASE_KEY: {'✅ Set' if SUPABASE_KEY else '❌ Missing'}")
+    print(f"   FINNHUB_KEY: {'✅ Set' if FINNHUB_KEY else '⚠️ Not set'}")
+    print(f"   TWELVE_DATA_KEY: {'✅ Set' if TWELVE_DATA_KEY else '⚠️ Not set'}")
+    print()
+    
+    # Parse arguments
+    mode = "collector"  # default
+    
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].lower()
+        if arg == "--bot":
+            mode = "bot"
+        elif arg == "--collect":
+            mode = "collector"
+        else:
+            print(f"⚠️ Unknown argument: {sys.argv[1]}")
+            print("   Valid options: --bot, --collect")
+            sys.exit(1)
+    
+    try:
+        if mode == "bot":
+            # 🆕 Bot mode พร้อม pre-check
+            print("🤖 Mode: Telegram Bot")
+            print("="*60)
+            
+            if not TELEGRAM_BOT_TOKEN:
+                print("\n❌ ERROR: TELEGRAM_BOT_TOKEN is required for bot mode")
+                print("   Please set the environment variable and try again")
+                sys.exit(1)
+            
+            print("\n✅ Starting bot...\n")
             asyncio.run(start_telegram_bot())
-        except KeyboardInterrupt:
-            print("\n👋 Goodbye!")
-        except Exception as e:
-            print(f"\n❌ Fatal error: {e}")
-            import traceback
-            traceback.print_exc()
-    else:
-        # รัน Stock Collector mode (ปกติ)
-        print("📊 Mode: Stock Data Collector")
-        print("="*60 + "\n")
-        
-        try:
+            
+        else:
+            # Collector mode
+            print("📊 Mode: Stock Data Collector")
+            print("="*60 + "\n")
             asyncio.run(main())
-        except KeyboardInterrupt:
-            print("\n⏹️  Collection stopped by user")
-        except Exception as e:
-            print(f"\n❌ Fatal error: {e}")
-            import traceback
-            traceback.print_exc()
+            
+    except KeyboardInterrupt:
+        print("\n\n👋 Goodbye!")
+        
+    except Exception as e:
+        print(f"\n❌ FATAL ERROR:")
+        print(f"   {e}")
+        print("\n📋 Full Traceback:")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
