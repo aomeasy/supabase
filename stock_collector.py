@@ -878,10 +878,39 @@ def calculate_overall_score_with_risk(symbol, tech_data, fundamental_data, news_
     
     return final_score 
 
-def generate_recommendation_advanced(overall_score, price, upside_pct, risk_score, category):
+
+
+def generate_recommendation_advanced(overall_score, price, upside_pct, risk_score, category, tech_data=None):
     """
-    สร้างคำแนะนำแบบละเอียด พิจารณาทั้ง Score + Risk + Upside
+    สร้างคำแนะนำแบบละเอียด พิจารณาทั้ง Score + Risk + Upside + MACD + RSI + EMA 200
+    
+    🆕 Logic ใหม่:
+    - ถ้า Buy Signal แต่ price < EMA 200 → เปลี่ยนเป็น "Alert Only" (สัญญาณเตือน)
+    - แนะนำเปิด Pilot Position 5-10% แทน All-in
     """
+    
+    # ดึงข้อมูล Technical (ถ้าส่งมา)
+    macd = tech_data.get('macd') if tech_data else None
+    macd_signal = tech_data.get('macd_signal') if tech_data else None
+    rsi = tech_data.get('rsi') if tech_data else None
+    ema_200 = tech_data.get('ema_200') if tech_data else None
+    
+    # 🆕 ตัวแปรเพื่อเช็คสัญญาณ
+    has_macd_crossover = False
+    has_strong_rsi = False
+    is_above_ema200 = False
+    
+    # 🆕 เช็ค MACD Crossover (MACD > Signal)
+    if macd and macd_signal:
+        has_macd_crossover = macd > macd_signal
+    
+    # 🆕 เช็ค RSI > 50 (แนวโน้มขาขึ้น)
+    if rsi:
+        has_strong_rsi = rsi > 50
+    
+    # 🆕 เช็คว่าราคาอยู่เหนือ EMA 200 หรือไม่
+    if price and ema_200:
+        is_above_ema200 = price > ema_200
     
     # 1. คำนวณ Confidence Level
     if risk_score < 20:
@@ -891,30 +920,66 @@ def generate_recommendation_advanced(overall_score, price, upside_pct, risk_scor
     else:
         confidence = "Low"
     
-    # 2. กำหนด Recommendation
+    # 2. กำหนด Recommendation (เพิ่มเงื่อนไข Alert Only)
+    recommendation = None
+    reason = None
+    position_size = None  # 🆕 เพิ่มคำแนะนำขนาด position
+    
     if overall_score >= 75 and risk_score < 50:
-        recommendation = "Strong Buy"
-        reason = f"Excellent signals with {confidence.lower()} risk"
+        # 🆕 เช็คว่ามี MACD Crossover + RSI > 50 หรือไม่
+        if has_macd_crossover and has_strong_rsi:
+            if is_above_ema200:
+                # ✅ Strong Buy เต็มรูปแบบ
+                recommendation = "Strong Buy"
+                reason = f"สัญญาณดีเยี่ยม: MACD Crossover + RSI {rsi:.0f} + อยู่เหนือ EMA 200"
+                position_size = "15-20% ของพอร์ต (แบ่ง 2-3 ครั้ง)"
+            else:
+                # ⚠️ Alert Only - ยังไม่ถึงจุดซื้อที่ดีที่สุด
+                recommendation = "Alert Only"
+                reason = f"สัญญาณเตือน: MACD Crossover + RSI {rsi:.0f} แต่ยังต่ำกว่า EMA 200"
+                position_size = "5-10% Pilot Position (ชิมลาง)"
+        else:
+            # Buy ปกติ แต่ไม่มีสัญญาณครบ
+            recommendation = "Buy"
+            reason = f"คะแนนดี แต่รอ MACD Crossover + RSI > 50 จะดีกว่า"
+            position_size = "10-15% ของพอร์ต"
         
     elif overall_score >= 60:
         if risk_score >= 60:
-            recommendation = "Hold"  # คะแนนดีแต่เสี่ยงสูง
-            reason = f"Good score but high risk ({risk_score}/100)"
+            recommendation = "Hold"
+            reason = f"คะแนนดีแต่เสี่ยงสูง ({risk_score}/100) - รอให้ชัดเจนกว่านี้"
+            position_size = "ไม่แนะนำเพิ่ม - ถือที่มีอยู่"
         else:
-            recommendation = "Buy"
-            reason = f"Positive momentum with {confidence.lower()} risk"
+            # 🆕 เช็คเงื่อนไข MACD + RSI + EMA 200
+            if has_macd_crossover and has_strong_rsi:
+                if is_above_ema200:
+                    recommendation = "Buy"
+                    reason = f"สัญญาณดี: MACD Crossover + RSI {rsi:.0f} + อยู่เหนือ EMA 200"
+                    position_size = "10-15% ของพอร์ต"
+                else:
+                    # ⚠️ Alert Only
+                    recommendation = "Alert Only"
+                    reason = f"สัญญาณเตือน: MACD Crossover + RSI {rsi:.0f} แต่ยังต่ำกว่า EMA 200"
+                    position_size = "5-10% Pilot Position (ชิมลาง)"
+            else:
+                recommendation = "Buy"
+                reason = f"โมเมนตัมดี แต่รอ MACD + RSI จะดีกว่า"
+                position_size = "10-15% ของพอร์ต"
     
     elif overall_score >= 45:
         recommendation = "Hold"
-        reason = "Wait for clearer signals"
+        reason = "รอสัญญาณที่ชัดเจนกว่านี้"
+        position_size = "ไม่แนะนำเพิ่ม"
     
     elif overall_score >= 30:
         recommendation = "Sell"
-        reason = f"Weak performance, consider reducing position"
+        reason = f"ผลงานอ่อนแอ พิจารณาลดสัดส่วน"
+        position_size = "ขาย 30-50% ของ position"
     
     else:
         recommendation = "Strong Sell"
-        reason = "Poor metrics across the board"
+        reason = "ตัวชี้วัดทุกด้านอ่อนแอ"
+        position_size = "ขายทั้งหมดหรือเกือบหมด"
     
     # 3. คำนวณ Price Target
     if upside_pct and upside_pct > 0:
@@ -926,11 +991,17 @@ def generate_recommendation_advanced(overall_score, price, upside_pct, risk_scor
     
     # 4. เพิ่ม Time Horizon (ระยะเวลาที่แนะนำ)
     if category in ['Growth', 'Momentum']:
-        time_horizon = "3-6 months"
+        time_horizon = "3-6 เดือน"
     elif category in ['Value', 'Dividend']:
-        time_horizon = "6-12 months"
+        time_horizon = "6-12 เดือน"
     else:
-        time_horizon = "6 months"
+        time_horizon = "6 เดือน"
+    
+    # 🆕 5. เพิ่มคำเตือนพิเศษสำหรับ Alert Only
+    if recommendation == "Alert Only":
+        warning = "⚠️ ห้าม All-in! ใช้เงินเล็กน้อยชิมลางก่อน รอให้ราคาทะลุ EMA 200 จึงเพิ่มเต็มที่"
+    else:
+        warning = None
     
     return {
         'recommendation': recommendation,
@@ -938,9 +1009,16 @@ def generate_recommendation_advanced(overall_score, price, upside_pct, risk_scor
         'confidence': confidence,
         'price_target': price_target,
         'time_horizon': time_horizon,
-        'risk_level': 'High' if risk_score >= 60 else 'Medium' if risk_score >= 30 else 'Low'
+        'risk_level': 'High' if risk_score >= 60 else 'Medium' if risk_score >= 30 else 'Low',
+        'position_size': position_size,  # 🆕
+        'warning': warning,  # 🆕
+        'technical_signals': {  # 🆕 รายละเอียดสัญญาณ
+            'macd_crossover': has_macd_crossover,
+            'rsi_above_50': has_strong_rsi,
+            'above_ema200': is_above_ema200
+        }
     }
-
+      
 def get_scoring_weights(symbol, category, market_cap):
     """
     กำหนดน้ำหนักคะแนนตามประเภทหุ้น
@@ -2135,15 +2213,28 @@ def format_stock_analysis_message(result):
     message += f"   • คะแนนรวม: <b>{result['overall_score']}/100</b>\n"
     
     # คำแนะนำ
+   
+
+
     rec = result['recommendation']
     rec_th = {
         'Strong Buy': '🟢 <b>แนะนำซื้อเข้ม</b>',
         'Buy': '🟢 แนะนำซื้อ',
         'Hold': '🟡 แนะนำถือ',
         'Sell': '🔴 แนะนำขาย',
-        'Strong Sell': '🔴 <b>แนะนำขายเร่งด่วน</b>'
+        'Strong Sell': '🔴 <b>แนะนำขายเร่งด่วน</b>',
+        'Alert Only': '⚠️ <b>สัญญาณเตือน (ยังไม่ถึงจุดซื้อ)</b>'  # 🆕
     }
     message += f"   • คำแนะนำ: {rec_th.get(rec, rec)}\n"
+    
+    # 🆕 แสดง Position Size (ขนาดการลงทุนแนะนำ)
+    if result.get('position_size'):
+        message += f"   • ขนาดลงทุนแนะนำ: <b>{result['position_size']}</b>\n"
+    
+    # 🆕 แสดงคำเตือนพิเศษ (สำหรับ Alert Only)
+    if result.get('warning'):
+        message += f"\n   ⚠️ <i>{result['warning']}</i>\n"
+
     
     # Confidence
     if result.get('confidence'):
