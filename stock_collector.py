@@ -879,7 +879,6 @@ def calculate_overall_score_with_risk(symbol, tech_data, fundamental_data, news_
     return final_score 
 
 
-
 def generate_recommendation_advanced(overall_score, price, upside_pct, risk_score, category, tech_data=None):
     """
     สร้างคำแนะนำแบบละเอียด พิจารณาทั้ง Score + Risk + Upside + MACD + RSI + EMA 200
@@ -1003,25 +1002,25 @@ def generate_recommendation_advanced(overall_score, price, upside_pct, risk_scor
     else:
         warning = None
     
+    # 🆕 6. Return ค่าทั้งหมด (แก้ไขตรงนี้ - ไม่ให้มี recommendation_data.get)
     return {
         'recommendation': recommendation,
         'reason': reason,
         'confidence': confidence,
         'price_target': price_target,
         'time_horizon': time_horizon,
-        'position_size': recommendation_data.get('position_size'),  # 🆕
-        'warning': recommendation_data.get('warning'),  # 🆕
-        'technical_signals': recommendation_data.get('technical_signals'),  # 🆕
         'risk_level': 'High' if risk_score >= 60 else 'Medium' if risk_score >= 30 else 'Low',
-        'position_size': position_size,  # 🆕
-        'warning': warning,  # 🆕
+        'position_size': position_size,  # ✅ ใช้ตัวแปร position_size โดยตรง
+        'warning': warning,  # ✅ ใช้ตัวแปร warning โดยตรง
         'technical_signals': {  # 🆕 รายละเอียดสัญญาณ
             'macd_crossover': has_macd_crossover,
             'rsi_above_50': has_strong_rsi,
             'above_ema200': is_above_ema200
         }
     }
-      
+
+
+
 def get_scoring_weights(symbol, category, market_cap):
     """
     กำหนดน้ำหนักคะแนนตามประเภทหุ้น
