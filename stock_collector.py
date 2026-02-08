@@ -4,8 +4,7 @@ import os
 import asyncio
 import yfinance as yf
 import pandas as pd
-import talib
-import pandas_ta as ta
+import talib 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
