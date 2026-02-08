@@ -1009,6 +1009,9 @@ def generate_recommendation_advanced(overall_score, price, upside_pct, risk_scor
         'confidence': confidence,
         'price_target': price_target,
         'time_horizon': time_horizon,
+        'position_size': recommendation_data.get('position_size'),  # 🆕
+        'warning': recommendation_data.get('warning'),  # 🆕
+        'technical_signals': recommendation_data.get('technical_signals'),  # 🆕
         'risk_level': 'High' if risk_score >= 60 else 'Medium' if risk_score >= 30 else 'Low',
         'position_size': position_size,  # 🆕
         'warning': warning,  # 🆕
@@ -2279,16 +2282,40 @@ def format_stock_analysis_message(result):
         upside_to_target = ((target - result['price']) / result['price']) * 100
         message += f"   • ราคาเป้าหมาย: ${target:.2f} (+{upside_to_target:.1f}%)\n"
     
+    
+
+
     # ระยะเวลา
     if result.get('time_horizon'):
         horizon = result['time_horizon']
         horizon_th = {
             '3-6 months': '3-6 เดือน',
             '6-12 months': '6-12 เดือน',
-            '6 months': '6 เดือน'
+            '6 months': '6 เดือน',
+            '3-6 เดือน': '3-6 เดือน',
+            '6-12 เดือน': '6-12 เดือน'
         }
         message += f"   • ระยะเวลาลงทุนแนะนำ: {horizon_th.get(horizon, horizon)}\n"
     
+    # 🆕 แสดงสัญญาณทางเทคนิค
+    tech_signals = result.get('technical_signals', {})
+    if tech_signals:
+        message += f"\n   📊 <b>สัญญาณทางเทคนิค:</b>\n"
+        
+        if tech_signals.get('macd_crossover'):
+            message += f"      ✅ MACD Crossover (ขาขึ้น)\n"
+        else:
+            message += f"      ❌ ยังไม่เกิด MACD Crossover\n"
+        
+        if tech_signals.get('rsi_above_50'):
+            message += f"      ✅ RSI > 50 (แนวโน้มดี)\n"
+        else:
+            message += f"      ❌ RSI < 50 (แนวโน้มอ่อน)\n"
+        
+        if tech_signals.get('above_ema200'):
+            message += f"      ✅ ราคาเหนือ EMA 200 (เทรนด์ขาขึ้น)\n"
+        else:
+            message += f"      ⚠️ ราคาต่ำกว่า EMA 200 (ยังไม่ปลอดภัย)\n"
     # ========================================
     # ข่าวสาร (แสดง 3 ข่าวแรก)
     # ========================================
@@ -3039,7 +3066,8 @@ async def main():
                 price=data.get('price'),
                 upside_pct=upside_pct,
                 risk_score=risk_score,
-                category=category
+                category=category,
+                tech_data=tech_data_full
             )
             
             recommendation = recommendation_data['recommendation']
