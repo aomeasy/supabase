@@ -25,8 +25,9 @@ jobs:
     
     - name: Verify installation
       run: |
-        python -c "import pandas_ta as ta; print('✅ pandas-ta installed')"
+        python -c "from ta.momentum import RSIIndicator; print('✅ ta library installed')"
         python -c "import telegram; print('✅ python-telegram-bot installed')"
+ 
     
     - name: Run Telegram Bot
       env:
