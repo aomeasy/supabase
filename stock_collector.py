@@ -5,6 +5,7 @@ import asyncio
 import yfinance as yf
 import pandas as pd
 import talib
+import pandas_ta as ta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
@@ -456,42 +457,43 @@ def fetch_fundamental_data(symbol):
         print(f"⚠️ Cannot fetch fundamental data for {symbol}: {e}")
         return {}
 
- 
 def calculate_technical_indicators(df):
-    """คำนวณค่าเทคนิคด้วย TA-Lib"""
+    """คำนวณค่าเทคนิคด้วย pandas-ta"""
     try:
-        if len(df) < 200:  # ต้องมีข้อมูลอย่างน้อย 200 แท่ง
+        if len(df) < 200:
             return None
         
-        # แปลงเป็น numpy arrays
-        close = df['Close'].values
-        high = df['High'].values
-        low = df['Low'].values
+        # คำนวณ indicators
+        df['rsi'] = ta.rsi(df['Close'], length=14)
         
-        # คำนวณด้วย talib
-        rsi = talib.RSI(close, timeperiod=14)
-        macd, macd_signal, macd_hist = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
-        ema_20 = talib.EMA(close, timeperiod=20)
-        ema_50 = talib.EMA(close, timeperiod=50)
-        ema_200 = talib.EMA(close, timeperiod=200)
-        bb_upper, bb_middle, bb_lower = talib.BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2)
+        macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
+        df['macd'] = macd['MACD_12_26_9']
+        df['macd_signal'] = macd['MACDs_12_26_9']
+        
+        df['ema_20'] = ta.ema(df['Close'], length=20)
+        df['ema_50'] = ta.ema(df['Close'], length=50)
+        df['ema_200'] = ta.ema(df['Close'], length=200)
+        
+        bbands = ta.bbands(df['Close'], length=20, std=2)
+        df['bb_upper'] = bbands['BBU_20_2.0']
+        df['bb_lower'] = bbands['BBL_20_2.0']
         
         # ดึงค่าล่าสุด
         return {
-            "price": float(close[-1]),
-            "rsi": float(rsi[-1]) if not pd.isna(rsi[-1]) else None,
-            "macd": float(macd[-1]) if not pd.isna(macd[-1]) else None,
-            "macd_signal": float(macd_signal[-1]) if not pd.isna(macd_signal[-1]) else None,
-            "ema_20": float(ema_20[-1]) if not pd.isna(ema_20[-1]) else None,
-            "ema_50": float(ema_50[-1]) if not pd.isna(ema_50[-1]) else None,
-            "ema_200": float(ema_200[-1]) if not pd.isna(ema_200[-1]) else None,
-            "bb_upper": float(bb_upper[-1]) if not pd.isna(bb_upper[-1]) else None,
-            "bb_lower": float(bb_lower[-1]) if not pd.isna(bb_lower[-1]) else None
+            "price": float(df['Close'].iloc[-1]),
+            "rsi": float(df['rsi'].iloc[-1]) if pd.notna(df['rsi'].iloc[-1]) else None,
+            "macd": float(df['macd'].iloc[-1]) if pd.notna(df['macd'].iloc[-1]) else None,
+            "macd_signal": float(df['macd_signal'].iloc[-1]) if pd.notna(df['macd_signal'].iloc[-1]) else None,
+            "ema_20": float(df['ema_20'].iloc[-1]) if pd.notna(df['ema_20'].iloc[-1]) else None,
+            "ema_50": float(df['ema_50'].iloc[-1]) if pd.notna(df['ema_50'].iloc[-1]) else None,
+            "ema_200": float(df['ema_200'].iloc[-1]) if pd.notna(df['ema_200'].iloc[-1]) else None,
+            "bb_upper": float(df['bb_upper'].iloc[-1]) if pd.notna(df['bb_upper'].iloc[-1]) else None,
+            "bb_lower": float(df['bb_lower'].iloc[-1]) if pd.notna(df['bb_lower'].iloc[-1]) else None
         }
     except Exception as e:
         print(f"❌ Error calculating indicators: {e}")
         return None
-
+         
 
 def calculate_upside_pct(current_price, ema_200, ema_50=None):
     """คำนวณ upside potential - ใช้ EMA 200 หรือ EMA 50 แทนถ้าไม่มี"""
