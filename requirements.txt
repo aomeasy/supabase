@@ -3,6 +3,7 @@ yfinance
 pandas
 ta-lib
 requests
+pandas-ta 
 python-dotenv 
 google-generativeai
 groq>=0.4.0
