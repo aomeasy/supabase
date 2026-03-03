@@ -452,7 +452,9 @@ def fetch_fundamental_data(symbol):
             "pe_ratio": info.get('forwardPE') or info.get('trailingPE'),
             "peg_ratio": info.get('pegRatio'),
             "eps_growth_pct": info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None,
-            "market_cap": info.get('marketCap')
+            "market_cap": info.get('marketCap'),
+            "analyst_price_target": info.get('targetMeanPrice') or info.get('targetMedianPrice') 
+            
         }
     except Exception as e:
         print(f"⚠️ Cannot fetch fundamental data for {symbol}: {e}")
@@ -521,23 +523,24 @@ def calculate_technical_indicators(df):
         traceback.print_exc()
         return None
          
-         
-
-def calculate_upside_pct(current_price, ema_200, ema_50=None):
-    """คำนวณ upside potential - ใช้ EMA 200 หรือ EMA 50 แทนถ้าไม่มี"""
+def calculate_upside_pct(current_price, ema_200, ema_50=None, analyst_target=None):  # ✅ เพิ่ม analyst_target
     if not current_price:
         return None
     
-    # ลองใช้ EMA 200 ก่อน
+    # ✅ ใช้ analyst price target จริงก่อน (แม่นยำกว่า EMA)
+    if analyst_target and analyst_target > 0:
+        return round(((analyst_target - current_price) / current_price) * 100, 2)
+    
+    # fallback เดิม — ไม่แตะ logic เดิมเลย
     if ema_200 and ema_200 > 0:
         return round(((ema_200 - current_price) / current_price) * 100, 2)
     
-    # ถ้าไม่มี EMA 200 ให้ใช้ EMA 50 แทน
     if ema_50 and ema_50 > 0:
         return round(((ema_50 - current_price) / current_price) * 100, 2)
     
-    return None
+    return None         
 
+ 
 
 def fetch_analyst_data(symbol):
     """ดึงข้อมูล Analyst Recommendations จาก yfinance"""
@@ -1942,10 +1945,12 @@ async def analyze_single_stock(symbol):
                 print(f"⚠️ Could not fetch fundamental data: {e}")
         
         # 3. คำนวณ Upside
+        _analyst_target = fundamental_data.get("analyst_price_target") if fundamental_data else None  # ✅
         upside_pct = calculate_upside_pct(
             data.get("price"), 
             data.get("ema_200"),
-            data.get("ema_50")
+            data.get("ema_50"),
+            analyst_target=_analyst_target  # ✅ ส่งเข้าไปเพิ่ม
         )
         
         # 4. ดึง Analyst & Sentiment (ถ้าไม่ใช่ ETF)
