@@ -1,4 +1,4 @@
-#save070269
+#save050369 10:19
 
 import os
 import asyncio
@@ -448,8 +448,9 @@ def fetch_fundamental_data(symbol):
         stock = yf.Ticker(symbol)
         info = stock.info
         
-        return {
-            "pe_ratio": info.get('forwardPE') or info.get('trailingPE'),
+        return { 
+            "pe_ratio": info.get('trailingPE'),
+            "pe_ratio_forward": info.get('forwardPE'),
             "peg_ratio": info.get('pegRatio'),
             "eps_growth_pct": info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None,
             "market_cap": info.get('marketCap'),
@@ -1934,9 +1935,11 @@ async def analyze_single_stock(symbol):
                 info = stock.info
                 
                 market_cap = info.get('marketCap')
-                
+             
+
                 fundamental_data = {
-                    "pe_ratio": info.get('forwardPE') or info.get('trailingPE'),
+                    "pe_ratio": info.get('trailingPE'),
+                    "pe_ratio_forward": info.get('forwardPE'),
                     "peg_ratio": info.get('pegRatio'),
                     "eps_growth_pct": info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None,
                     "market_cap": market_cap
@@ -2893,8 +2896,11 @@ async def main():
                 market_cap = info.get('marketCap')
                 
                 # ดึง fundamental data
+            
+
                 fundamental_data = {
-                    "pe_ratio": info.get('forwardPE') or info.get('trailingPE'),
+                    "pe_ratio": info.get('trailingPE'),
+                    "pe_ratio_forward": info.get('forwardPE'),
                     "peg_ratio": info.get('pegRatio'),
                     "eps_growth_pct": info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None,
                     "market_cap": market_cap
