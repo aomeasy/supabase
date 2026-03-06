@@ -1,4 +1,4 @@
-#save050369 10:19
+#save060369 11:10
 
 import os
 import asyncio
@@ -1937,12 +1937,15 @@ async def analyze_single_stock(symbol):
                 market_cap = info.get('marketCap')
              
 
+             
+
                 fundamental_data = {
                     "pe_ratio": info.get('trailingPE'),
                     "pe_ratio_forward": info.get('forwardPE'),
                     "peg_ratio": info.get('pegRatio'),
                     "eps_growth_pct": info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None,
-                    "market_cap": market_cap
+                    "market_cap": market_cap,
+                    "analyst_price_target": info.get('targetMeanPrice') or info.get('targetMedianPrice')
                 }
             except Exception as e:
                 print(f"⚠️ Could not fetch fundamental data: {e}")
@@ -2898,12 +2901,16 @@ async def main():
                 # ดึง fundamental data
             
 
+            
+
+
                 fundamental_data = {
                     "pe_ratio": info.get('trailingPE'),
                     "pe_ratio_forward": info.get('forwardPE'),
                     "peg_ratio": info.get('pegRatio'),
                     "eps_growth_pct": info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None,
-                    "market_cap": market_cap
+                    "market_cap": market_cap,
+                    "analyst_price_target": info.get('targetMeanPrice') or info.get('targetMedianPrice')
                 }
                 
                 if market_cap:
@@ -2914,12 +2921,14 @@ async def main():
                 print(f"⚠️ Could not fetch yfinance data: {yf_error}")
         
         # คำนวณ Upside
+      
+
         upside_pct = calculate_upside_pct(
             data.get("price"), 
             data.get("ema_200"),
-            data.get("ema_50")
+            data.get("ema_50"),
+            analyst_target=fundamental_data.get("analyst_price_target") if fundamental_data else None
         )
-        
         # ข้าม analyst/sentiment สำหรับ ETF
         analyst_pct = None if category == 'ETF' else fetch_analyst_data(symbol)
         sentiment = None if category == 'ETF' else fetch_sentiment_score(symbol)
