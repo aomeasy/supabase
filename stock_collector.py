@@ -33,119 +33,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-
-def calculate_overall_score(symbol, tech_data, fundamental_data, news_sentiment):
-    """
-    คำนวณ Overall Score จากข้อมูลต่างๆ โดยไม่ใช้ AI API
-    Score: 0-100 (integer)
-    """
-    
-    score = 50  # เริ่มที่ 50 (กลางๆ)
-    
-    # === 1. Technical Score (40 คะแนน) ===
-    technical_score = 0
-    
-    # RSI (10 คะแนน)
-    rsi = tech_data.get('rsi')
-    if rsi:
-        if 30 <= rsi <= 70:
-            technical_score += 10
-        elif 20 <= rsi < 30 or 70 < rsi <= 80:
-            technical_score += 5
-    
-    # MACD (10 คะแนน)
-    macd = tech_data.get('macd')
-    macd_signal = tech_data.get('macd_signal')
-    if macd and macd_signal:
-        if macd > macd_signal:
-            technical_score += 10
-        elif macd > macd_signal * 0.9:
-            technical_score += 5
-    
-    # EMA Trend (10 คะแนน)
-    price = tech_data.get('price')
-    ema_20 = tech_data.get('ema_20')
-    ema_50 = tech_data.get('ema_50')
-    ema_200 = tech_data.get('ema_200')
-    
-    if price and ema_20 and ema_50:
-        if price > ema_20 > ema_50:
-            technical_score += 10
-        elif price > ema_20:
-            technical_score += 5
-    
-    # Upside Potential (10 คะแนน)
-    upside_pct = tech_data.get('upside_pct')
-    if upside_pct:
-        if upside_pct > 20:
-            technical_score += 10
-        elif upside_pct > 10:
-            technical_score += 7
-        elif upside_pct > 5:
-            technical_score += 4
-    
-    score += (technical_score / 40) * 40
-    
-    
-    # === 2. Fundamental Score (30 คะแนน) ===
-    fundamental_score = 0
-    
-    if fundamental_data:
-        pe_ratio = fundamental_data.get('pe_ratio')
-        if pe_ratio:
-            if 10 <= pe_ratio <= 25:
-                fundamental_score += 10
-            elif 5 <= pe_ratio < 10 or 25 < pe_ratio <= 35:
-                fundamental_score += 5
-        
-        peg_ratio = fundamental_data.get('peg_ratio')
-        if peg_ratio:
-            if peg_ratio < 1:
-                fundamental_score += 10
-            elif 1 <= peg_ratio <= 1.5:
-                fundamental_score += 7
-            elif 1.5 < peg_ratio <= 2:
-                fundamental_score += 4
-        
-        eps_growth = fundamental_data.get('eps_growth_pct')
-        if eps_growth:
-            if eps_growth > 20:
-                fundamental_score += 10
-            elif eps_growth > 10:
-                fundamental_score += 7
-            elif eps_growth > 5:
-                fundamental_score += 4
-    
-    score += (fundamental_score / 30) * 30
-    
-    
-    # === 3. Sentiment Score (30 คะแนน) ===
-    sentiment_score = 0
-    
-    if news_sentiment:
-        if news_sentiment > 0.5:
-            sentiment_score += 15
-        elif news_sentiment > 0.2:
-            sentiment_score += 10
-        elif news_sentiment >= -0.2:
-            sentiment_score += 5
-    
-    analyst_buy_pct = tech_data.get('analyst_buy_pct')
-    if analyst_buy_pct:
-        if analyst_buy_pct >= 70:
-            sentiment_score += 15
-        elif analyst_buy_pct >= 50:
-            sentiment_score += 10
-        elif analyst_buy_pct >= 30:
-            sentiment_score += 5
-    
-    score += (sentiment_score / 30) * 30
-    
-    # ⬇️ แก้ไขตรงนี้: แปลงเป็น int
-    return int(min(100, max(0, round(score))))  # ✅ คืนค่าเป็น integer
-
-
+ 
 def generate_recommendation(overall_score, price, upside_pct):
     """สร้างคำแนะนำจาก Score"""
     
@@ -1158,44 +1046,41 @@ def get_scoring_weights(symbol, category, market_cap):
     }
     
     return category_weights.get(category, (0.35, 0.35, 0.30))
-
-
+    
 def calculate_overall_score(symbol, tech_data, fundamental_data, news_sentiment, category='Core', market_cap=None):
     """
     คำนวณ Overall Score แบบ Dynamic Weighting
     """
     
-    # คำนวณคะแนนแต่ละส่วน (เหมือนเดิม)
-    technical_score = calculate_technical_score(tech_data)      # 0-40
+    # คำนวณคะแนนแต่ละส่วน
+    technical_score   = calculate_technical_score(tech_data)       # 0-40
     fundamental_score = calculate_fundamental_score(fundamental_data)  # 0-30
-    sentiment_score = calculate_sentiment_score(news_sentiment, tech_data)  # 0-30
+    sentiment_score   = calculate_sentiment_score(news_sentiment, tech_data)  # 0-30
     
-    # 🔥 ใช้น้ำหนักแบบ Dynamic
+    # Dynamic Weighting
     tech_w, fund_w, sent_w = get_scoring_weights(symbol, category, market_cap)
     
     final_score = (
-        (technical_score / 40) * 100 * tech_w +
+        (technical_score   / 40) * 100 * tech_w +
         (fundamental_score / 30) * 100 * fund_w +
-        (sentiment_score / 30) * 100 * sent_w
+        (sentiment_score   / 30) * 100 * sent_w
     )
-     
 
-
-    # === ใหม่: Macro Penalty (ไม่กระทบ weight เดิม) ===
-    macro = tech_data.get('macro') or {}
-    vix_val = macro.get('vix') or 0
-    market_sent = macro.get('market_sentiment') or 'Neutral'
+    # Macro Penalty (ไม่กระทบ weight เดิม)
+    macro        = tech_data.get('macro') or {}
+    vix_val      = macro.get('vix') or 0
+    market_sent  = macro.get('market_sentiment') or 'Neutral'
 
     if vix_val > 35:
-        final_score *= 0.80   # ตลาด Panic → ลด 20%
+        final_score *= 0.80   # Panic → ลด 20%
     elif vix_val > 25:
-        final_score *= 0.90   # ตลาด Fear → ลด 10%
+        final_score *= 0.90   # Fear  → ลด 10%
 
     if market_sent == 'Bearish':
         final_score *= 0.95   # ตลาดลง → ลด 5%
 
-    return int(min(100, max(0, round(final_score)))) 
-
+    return int(min(100, max(0, round(final_score))))
+ 
 def calculate_news_sentiment_advanced(headline, summary=''):
     """
     Sentiment Analysis แบบละเอียดขึ้น
