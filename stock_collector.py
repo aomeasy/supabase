@@ -3098,6 +3098,7 @@ async def main():
         # ============================================
         # STEP 3: บันทึก Snapshot
         # ============================================
+
         snapshot_payload = {
             "symbol": symbol,
             "price": data.get("price"),
@@ -3113,8 +3114,28 @@ async def main():
             "upside_pct": upside_pct,
             "analyst_buy_pct": analyst_pct,
             "sentiment_score": sentiment,
-            "recorded_at": datetime.now().isoformat()
+            "recorded_at": datetime.now().isoformat(),
+            # ── ใหม่ Volume ──────────────────────────
+            "volume":     data.get("volume"),
+            "vol_ma20":   data.get("vol_ma20"),
+            "vol_ratio":  data.get("vol_ratio"),
+            "obv":        data.get("obv"),
+            "vwap":       data.get("vwap"),
+            # ── ใหม่ Technical ───────────────────────
+            "atr":        data.get("atr"),
+            "stoch_k":    data.get("stoch_k"),
+            "stoch_d":    data.get("stoch_d"),
+            # ── ใหม่ Macro ───────────────────────────
+            "vix":              macro_data.get("vix"),
+            "vix_signal":       macro_data.get("vix_signal"),
+            "spy_chg":          macro_data.get("spy_chg"),
+            "qqq_chg":          macro_data.get("qqq_chg"),
+            "xlk_chg":          macro_data.get("xlk_chg"),
+            "bond_10y":         macro_data.get("bond"),
+            "market_sentiment": macro_data.get("market_sentiment"),
         }
+        
+         
         
         # เพิ่ม fundamental data ใน snapshot
         if fundamental_data:
@@ -3287,8 +3308,15 @@ async def main():
             "overall_score": overall_score,
             "recommendation": recommendation,
             "price_at_prediction": data.get('price'),
-            "actual_outcome": None
+            "actual_outcome": None,
+            # ── ใหม่ ─────────────────────────────────
+            "stop_loss":         recommendation_data.get('stop_loss')    if isinstance(recommendation_data, dict) else None,
+            "risk_reward":       recommendation_data.get('risk_reward')  if isinstance(recommendation_data, dict) else None,
+            "position_size":     recommendation_data.get('position_size') if isinstance(recommendation_data, dict) else None,
+            "warning":           recommendation_data.get('warning')      if isinstance(recommendation_data, dict) else None,
+            "technical_signals": recommendation_data.get('technical_signals') if isinstance(recommendation_data, dict) else None,
         }
+       
         
         # 🆕 เพิ่มฟิลด์ใหม่ (ตอนนี้ใช้ได้แล้ว!)
         if risk_score > 0:
