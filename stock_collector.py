@@ -3309,6 +3309,7 @@ async def main():
             "recommendation": recommendation,
             "price_at_prediction": data.get('price'),
             "actual_outcome": None,
+            "reason": reason,
             # ── ใหม่ ─────────────────────────────────
             "stop_loss":         recommendation_data.get('stop_loss')    if isinstance(recommendation_data, dict) else None,
             "risk_reward":       recommendation_data.get('risk_reward')  if isinstance(recommendation_data, dict) else None,
