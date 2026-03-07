@@ -787,10 +787,8 @@ async def fetch_data_waterfall(symbol):
 
     print(f"❌ All sources failed for {symbol}")
     return None
- 
 
 def calculate_technical_score(tech_data):
-    """แยกการคำนวณ Technical Score ออกมา"""
     score = 0
     
     # RSI (10 คะแนน)
@@ -821,77 +819,38 @@ def calculate_technical_score(tech_data):
         elif price > ema_20:
             score += 5
 
-# Upside Potential (10 คะแนน) — ไม่เปลี่ยน
+    # Upside Potential (10 คะแนน)
     upside_pct = tech_data.get('upside_pct')
     if upside_pct:
         if upside_pct > 20:
-            technical_score += 10
+            score += 10        # ← แก้จาก technical_score เป็น score
         elif upside_pct > 10:
-            technical_score += 7
+            score += 7
         elif upside_pct > 5:
-            technical_score += 4
+            score += 4
 
-    # === ใหม่: Volume Confirmation (bonus ±5 คะแนน ไม่กระทบ 40 เดิม) ===
+    # Volume Confirmation (bonus ±5)
     vol_ratio = tech_data.get('vol_ratio')
-    price     = tech_data.get('price')
-    ema_20    = tech_data.get('ema_20')
     change    = tech_data.get('change_pct', 0) or 0
 
     if vol_ratio:
         if change > 0 and vol_ratio > 120:
-            technical_score += 5   # ขึ้นพร้อม Volume สูง = ดี
+            score += 5         # ← แก้จาก technical_score เป็น score
         elif change < 0 and vol_ratio > 150:
-            technical_score -= 5   # ลงพร้อม Volume สูงมาก = แย่
+            score -= 5
         elif change < 0 and vol_ratio < 80:
-            technical_score += 2   # ลงแต่ Volume ต่ำ = แค่ noise
+            score += 2
 
     # Stochastic Confirmation (bonus ±3)
     stoch_k = tech_data.get('stoch_k')
     if stoch_k:
         if stoch_k < 20:
-            technical_score += 3   # Oversold
+            score += 3         # ← แก้จาก technical_score เป็น score
         elif stoch_k > 80:
-            technical_score -= 3   # Overbought
+            score -= 3
 
-    return technical_score
-def calculate_fundamental_score(fundamental_data):
-    """แยกการคำนวณ Fundamental Score ออกมา"""
-    if not fundamental_data:
-        return 0
-    
-    score = 0
-    
-    # P/E Ratio (10 คะแนน)
-    pe_ratio = fundamental_data.get('pe_ratio')
-    if pe_ratio:
-        if 10 <= pe_ratio <= 25:
-            score += 10
-        elif 5 <= pe_ratio < 10 or 25 < pe_ratio <= 35:
-            score += 5
-    
-    # PEG Ratio (10 คะแนน)
-    peg_ratio = fundamental_data.get('peg_ratio')
-    if peg_ratio:
-        if peg_ratio < 1:
-            score += 10
-        elif 1 <= peg_ratio <= 1.5:
-            score += 7
-        elif 1.5 < peg_ratio <= 2:
-            score += 4
-    
-    # EPS Growth (10 คะแนน)
-    eps_growth = fundamental_data.get('eps_growth_pct')
-    if eps_growth:
-        if eps_growth > 20:
-            score += 10
-        elif eps_growth > 10:
-            score += 7
-        elif eps_growth > 5:
-            score += 4
-    
-    return score  # 0-30
-
-
+    return score
+ 
 def calculate_sentiment_score(news_sentiment, tech_data):
     """แยกการคำนวณ Sentiment Score ออกมา"""
     score = 0
