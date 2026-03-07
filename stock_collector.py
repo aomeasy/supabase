@@ -712,6 +712,14 @@ async def fetch_data_waterfall(symbol):
         
         if not df.empty and len(df) >= 2:
             tech_data = calculate_technical_indicators(df)
+ 
+
+            # เพิ่มตรงนี้
+            print(f"\n🔬 RAW tech_data keys: {list(tech_data.keys()) if tech_data else 'None'}")
+            print(f"   volume   = {tech_data.get('volume') if tech_data else 'N/A'}")
+            print(f"   vol_ratio= {tech_data.get('vol_ratio') if tech_data else 'N/A'}")
+            print(f"   atr      = {tech_data.get('atr') if tech_data else 'N/A'}")
+            print(f"   stoch_k  = {tech_data.get('stoch_k') if tech_data else 'N/A'}")
             
             # ถ้าคำนวณไม่ได้ (ETF หรือข้อมูลน้อย) ใช้ข้อมูลพื้นฐาน
             if not tech_data:
@@ -3150,7 +3158,17 @@ async def main():
         
         for db_attempt in range(max_db_retries):
             try:
+                # เพิ่มตรงนี้
+                print(f"\n📦 snapshot_payload ที่จะ insert:")
+                print(f"   volume          = {snapshot_payload.get('volume')}")
+                print(f"   vol_ratio       = {snapshot_payload.get('vol_ratio')}")
+                print(f"   atr             = {snapshot_payload.get('atr')}")
+                print(f"   stoch_k         = {snapshot_payload.get('stoch_k')}")
+                print(f"   vix             = {snapshot_payload.get('vix')}")
+                print(f"   market_sentiment= {snapshot_payload.get('market_sentiment')}")
+                
                 supabase.table("stock_snapshots").insert(snapshot_payload).execute()
+                
                 print(f"✅ Snapshot saved: {symbol}")
                 print(f"   Price: ${data.get('price'):.2f} | Change: {data.get('change_pct'):.2f}%")
                 if data.get('rsi'):
