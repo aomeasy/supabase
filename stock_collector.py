@@ -738,7 +738,44 @@ def calculate_technical_score(tech_data):
             score -= 3
 
     return score
- 
+
+def calculate_fundamental_score(fundamental_data):
+    """แยกการคำนวณ Fundamental Score ออกมา"""
+    if not fundamental_data:
+        return 0
+    
+    score = 0
+    
+    # P/E Ratio (10 คะแนน)
+    pe_ratio = fundamental_data.get('pe_ratio')
+    if pe_ratio:
+        if 10 <= pe_ratio <= 25:
+            score += 10
+        elif 5 <= pe_ratio < 10 or 25 < pe_ratio <= 35:
+            score += 5
+    
+    # PEG Ratio (10 คะแนน)
+    peg_ratio = fundamental_data.get('peg_ratio')
+    if peg_ratio:
+        if peg_ratio < 1:
+            score += 10
+        elif 1 <= peg_ratio <= 1.5:
+            score += 7
+        elif 1.5 < peg_ratio <= 2:
+            score += 4
+    
+    # EPS Growth (10 คะแนน)
+    eps_growth = fundamental_data.get('eps_growth_pct')
+    if eps_growth:
+        if eps_growth > 20:
+            score += 10
+        elif eps_growth > 10:
+            score += 7
+        elif eps_growth > 5:
+            score += 4
+    
+    return score  # 0-30
+    
 def calculate_sentiment_score(news_sentiment, tech_data):
     """แยกการคำนวณ Sentiment Score ออกมา"""
     score = 0
