@@ -505,18 +505,55 @@ def calculate_technical_indicators(df):
         
         # ดึงค่าล่าสุด
         close = df['Close'].values
-        
+
+        # === Volume Analysis ===
+        vol_series = df['Volume'].astype(float)
+        vol_ma20   = vol_series.rolling(20).mean()
+        vol_ratio  = (vol_series / vol_ma20 * 100).round(1)
+
+        # OBV (On Balance Volume)
+        obv = (vol_series * df['Close'].diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))).cumsum()
+
+        # VWAP (ใช้ราคาปิดแทน intraday เพราะเป็น daily data)
+        typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+        vwap = (typical_price * vol_series).cumsum() / vol_series.cumsum()
+
+        # ATR (Average True Range, window=14) — ใช้คำนวณ Stop Loss
+        from ta.volatility import AverageTrueRange
+        atr_indicator = AverageTrueRange(
+            high=df['High'], low=df['Low'], close=df['Close'], window=14
+        )
+        df['atr'] = atr_indicator.average_true_range()
+
+        # Stochastic RSI (window=14)
+        from ta.momentum import StochasticOscillator
+        stoch = StochasticOscillator(
+            high=df['High'], low=df['Low'], close=df['Close'], window=14, smooth_window=3
+        )
+        df['stoch_k'] = stoch.stoch()
+        df['stoch_d'] = stoch.stoch_signal()
+
         return {
-            "price": float(close[-1]),
-            "rsi": float(df['rsi'].iloc[-1]) if pd.notna(df['rsi'].iloc[-1]) else None,
-            "macd": float(df['macd'].iloc[-1]) if pd.notna(df['macd'].iloc[-1]) else None,
+            "price":       float(close[-1]),
+            "rsi":         float(df['rsi'].iloc[-1])         if pd.notna(df['rsi'].iloc[-1])         else None,
+            "macd":        float(df['macd'].iloc[-1])        if pd.notna(df['macd'].iloc[-1])        else None,
             "macd_signal": float(df['macd_signal'].iloc[-1]) if pd.notna(df['macd_signal'].iloc[-1]) else None,
-            "ema_20": float(df['ema_20'].iloc[-1]) if pd.notna(df['ema_20'].iloc[-1]) else None,
-            "ema_50": float(df['ema_50'].iloc[-1]) if pd.notna(df['ema_50'].iloc[-1]) else None,
-            "ema_200": float(df['ema_200'].iloc[-1]) if pd.notna(df['ema_200'].iloc[-1]) else None,
-            "bb_upper": float(df['bb_upper'].iloc[-1]) if pd.notna(df['bb_upper'].iloc[-1]) else None,
-            "bb_lower": float(df['bb_lower'].iloc[-1]) if pd.notna(df['bb_lower'].iloc[-1]) else None
+            "ema_20":      float(df['ema_20'].iloc[-1])      if pd.notna(df['ema_20'].iloc[-1])      else None,
+            "ema_50":      float(df['ema_50'].iloc[-1])      if pd.notna(df['ema_50'].iloc[-1])      else None,
+            "ema_200":     float(df['ema_200'].iloc[-1])     if pd.notna(df['ema_200'].iloc[-1])     else None,
+            "bb_upper":    float(df['bb_upper'].iloc[-1])    if pd.notna(df['bb_upper'].iloc[-1])    else None,
+            "bb_lower":    float(df['bb_lower'].iloc[-1])    if pd.notna(df['bb_lower'].iloc[-1])    else None,
+            # === ใหม่ ===
+            "volume":      float(vol_series.iloc[-1])        if pd.notna(vol_series.iloc[-1])        else None,
+            "vol_ma20":    float(vol_ma20.iloc[-1])          if pd.notna(vol_ma20.iloc[-1])          else None,
+            "vol_ratio":   float(vol_ratio.iloc[-1])         if pd.notna(vol_ratio.iloc[-1])         else None,
+            "obv":         float(obv.iloc[-1])               if pd.notna(obv.iloc[-1])               else None,
+            "vwap":        float(vwap.iloc[-1])              if pd.notna(vwap.iloc[-1])              else None,
+            "atr":         float(df['atr'].iloc[-1])         if pd.notna(df['atr'].iloc[-1])         else None,
+            "stoch_k":     float(df['stoch_k'].iloc[-1])     if pd.notna(df['stoch_k'].iloc[-1])     else None,
+            "stoch_d":     float(df['stoch_d'].iloc[-1])     if pd.notna(df['stoch_d'].iloc[-1])     else None,
         }
+ 
         
     except Exception as e:
         print(f"❌ Error calculating indicators: {e}")
@@ -567,7 +604,61 @@ def fetch_analyst_data(symbol):
     
     return None
 
+def fetch_macro_data():
+    """
+    ดึงข้อมูล Macro: VIX, SPY, QQQ, XLK, Bond 10Y
+    ไม่กระทบ logic เดิม — เรียกแยกเสมอ
+    """
+    try:
+        macro_tickers = {
+            "vix":   "^VIX",
+            "spy":   "^GSPC",
+            "qqq":   "QQQ",
+            "xlk":   "XLK",
+            "bond":  "^TNX",
+        }
+        result = {}
+        for key, ticker in macro_tickers.items():
+            try:
+                df = yf.download(ticker, period="3d", interval="1d", progress=False, auto_adjust=True)
+                if len(df) >= 2:
+                    chg = float((df["Close"].iloc[-1] / df["Close"].iloc[-2] - 1) * 100)
+                    val = float(df["Close"].iloc[-1])
+                    result[key]          = round(val, 2)
+                    result[f"{key}_chg"] = round(chg, 2)
+                else:
+                    result[key]          = None
+                    result[f"{key}_chg"] = None
+            except:
+                result[key]          = None
+                result[f"{key}_chg"] = None
 
+        # สรุป Market Sentiment
+        spy_chg = result.get("spy_chg") or 0
+        qqq_chg = result.get("qqq_chg") or 0
+        vix_val = result.get("vix") or 20
+        avg_chg = (spy_chg + qqq_chg) / 2
+
+        if vix_val > 30 or avg_chg < -1.5:
+            result["market_sentiment"] = "Bearish"
+        elif vix_val < 15 and avg_chg > 1.0:
+            result["market_sentiment"] = "Bullish"
+        else:
+            result["market_sentiment"] = "Neutral"
+
+        # VIX Risk Level
+        if vix_val > 40:   result["vix_signal"] = "Panic"
+        elif vix_val > 25: result["vix_signal"] = "Fear"
+        elif vix_val > 15: result["vix_signal"] = "Caution"
+        else:              result["vix_signal"] = "Calm"
+
+        print(f"📊 Macro: VIX={result.get('vix')} ({result.get('vix_signal')}) | SPY={spy_chg:+.2f}% | QQQ={qqq_chg:+.2f}% | Sentiment={result.get('market_sentiment')}")
+        return result
+
+    except Exception as e:
+        print(f"⚠️ fetch_macro_data failed: {e}")
+        return {}
+        
 def fetch_sentiment_score(symbol):
     """คำนวณ Sentiment Score จากข่าวของ yfinance"""
     try:
@@ -721,20 +812,40 @@ def calculate_technical_score(tech_data):
             score += 10
         elif price > ema_20:
             score += 5
-    
-    # Upside Potential (10 คะแนน)
+
+# Upside Potential (10 คะแนน) — ไม่เปลี่ยน
     upside_pct = tech_data.get('upside_pct')
     if upside_pct:
         if upside_pct > 20:
-            score += 10
+            technical_score += 10
         elif upside_pct > 10:
-            score += 7
+            technical_score += 7
         elif upside_pct > 5:
-            score += 4
-    
-    return score  # 0-40
+            technical_score += 4
 
+    # === ใหม่: Volume Confirmation (bonus ±5 คะแนน ไม่กระทบ 40 เดิม) ===
+    vol_ratio = tech_data.get('vol_ratio')
+    price     = tech_data.get('price')
+    ema_20    = tech_data.get('ema_20')
+    change    = tech_data.get('change_pct', 0) or 0
 
+    if vol_ratio:
+        if change > 0 and vol_ratio > 120:
+            technical_score += 5   # ขึ้นพร้อม Volume สูง = ดี
+        elif change < 0 and vol_ratio > 150:
+            technical_score -= 5   # ลงพร้อม Volume สูงมาก = แย่
+        elif change < 0 and vol_ratio < 80:
+            technical_score += 2   # ลงแต่ Volume ต่ำ = แค่ noise
+
+    # Stochastic Confirmation (bonus ±3)
+    stoch_k = tech_data.get('stoch_k')
+    if stoch_k:
+        if stoch_k < 20:
+            technical_score += 3   # Oversold
+        elif stoch_k > 80:
+            technical_score -= 3   # Overbought
+
+    return technical_score
 def calculate_fundamental_score(fundamental_data):
     """แยกการคำนวณ Fundamental Score ออกมา"""
     if not fundamental_data:
@@ -869,9 +980,14 @@ def adjust_score_by_risk(overall_score, risk_score):
 # ตัวอย่างการใช้ใน calculate_overall_score
 def calculate_overall_score_with_risk(symbol, tech_data, fundamental_data, news_sentiment, category='Core', market_cap=None):
     
-    # คำนวณ Score ปกติ
-    base_score = calculate_overall_score(symbol, tech_data, fundamental_data, news_sentiment, category, market_cap)
-    
+    base_score = calculate_overall_score(
+        symbol=symbol,
+        tech_data=tech_data,
+        fundamental_data=fundamental_data,
+        news_sentiment=news_sentiment,
+        category=category,
+        market_cap=market_cap
+    )
     # คำนวณความเสี่ยง
     risk_score = calculate_risk_score(tech_data, fundamental_data, market_cap)
     
@@ -984,13 +1100,26 @@ def generate_recommendation_advanced(overall_score, price, upside_pct, risk_scor
         reason = "ตัวชี้วัดทุกด้านอ่อนแอ"
         position_size = "ขายทั้งหมดหรือเกือบหมด"
     
-    # 3. คำนวณ Price Target
+ 
+    # 3. คำนวณ Price Target (ไม่เปลี่ยน)
     if upside_pct and upside_pct > 0:
-        # ปรับ upside ตามความเสี่ยง
         adjusted_upside = upside_pct * (1 - risk_score / 200)
         price_target = round(price * (1 + adjusted_upside / 100), 2)
     else:
         price_target = None
+
+    # === ใหม่: ATR-based Stop Loss ===
+    atr = tech_data.get('atr') if tech_data else None
+    if atr and price:
+        stop_loss = round(price - (atr * 2), 2)   # 2×ATR = standard
+        if price_target:
+            rr_ratio = round((price_target - price) / (price - stop_loss), 2) if price > stop_loss else 0
+        else:
+            rr_ratio = None
+    else:
+        stop_loss = None
+        rr_ratio  = None
+ 
     
     # 4. เพิ่ม Time Horizon (ระยะเวลาที่แนะนำ)
     if category in ['Growth', 'Momentum']:
@@ -1020,7 +1149,9 @@ def generate_recommendation_advanced(overall_score, price, upside_pct, risk_scor
             'macd_crossover': has_macd_crossover,
             'rsi_above_50': has_strong_rsi,
             'above_ema200': is_above_ema200
-        }
+        },
+        'stop_loss': stop_loss,
+        'risk_reward': rr_ratio,
     }
 
 
@@ -1080,9 +1211,23 @@ def calculate_overall_score(symbol, tech_data, fundamental_data, news_sentiment,
         (fundamental_score / 30) * 100 * fund_w +
         (sentiment_score / 30) * 100 * sent_w
     )
-    
-    return int(min(100, max(0, round(final_score))))
- 
+     
+
+
+    # === ใหม่: Macro Penalty (ไม่กระทบ weight เดิม) ===
+    macro = tech_data.get('macro') or {}
+    vix_val = macro.get('vix') or 0
+    market_sent = macro.get('market_sentiment') or 'Neutral'
+
+    if vix_val > 35:
+        final_score *= 0.80   # ตลาด Panic → ลด 20%
+    elif vix_val > 25:
+        final_score *= 0.90   # ตลาด Fear → ลด 10%
+
+    if market_sent == 'Bearish':
+        final_score *= 0.95   # ตลาดลง → ลด 5%
+
+    return int(min(100, max(0, round(final_score)))) 
 
 def calculate_news_sentiment_advanced(headline, summary=''):
     """
@@ -1985,6 +2130,7 @@ async def analyze_single_stock(symbol):
                     news_sentiment_advanced = round(sum(sentiment_scores) / len(sentiment_scores), 2)
         
         # 6. คำนวณ AI Prediction
+        macro_data = fetch_macro_data()
         tech_data_full = {
             'price': data.get('price'),
             'rsi': data.get('rsi'),
@@ -1996,7 +2142,17 @@ async def analyze_single_stock(symbol):
             'bb_upper': data.get('bb_upper'),
             'bb_lower': data.get('bb_lower'),
             'upside_pct': upside_pct,
-            'analyst_buy_pct': analyst_pct
+            'analyst_buy_pct': analyst_pct,
+            'volume':         data.get('volume'),
+            'vol_ma20':       data.get('vol_ma20'),
+            'vol_ratio':      data.get('vol_ratio'),
+            'obv':            data.get('obv'),
+            'vwap':           data.get('vwap'),
+            'atr':            data.get('atr'),
+            'stoch_k':        data.get('stoch_k'),
+            'stoch_d':        data.get('stoch_d'),
+            'change_pct':     data.get('change_pct'),
+            'macro':          macro_data,
         }
         
         final_sentiment = news_sentiment_advanced if news_sentiment_advanced is not None else sentiment
@@ -2074,6 +2230,9 @@ async def analyze_single_stock(symbol):
             'price_target': price_target,
             'confidence': confidence,
             'time_horizon': time_horizon,
+            'position_size': recommendation_data.get('position_size') if isinstance(recommendation_data, dict) else None,
+            'warning': recommendation_data.get('warning') if isinstance(recommendation_data, dict) else None,
+            'technical_signals': recommendation_data.get('technical_signals') if isinstance(recommendation_data, dict) else {},
             'market_cap': market_cap,
             'fundamental': fundamental_data,
             'insights': insights
@@ -2843,6 +3002,9 @@ async def main():
     )
 
     print(f"\n🚀 Starting technical analysis for {len(stocks)} symbols")
+    print("🌍 Fetching macro data...")
+    macro_data = fetch_macro_data()
+    print()
     print(f"📅 Analysis time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
     # ตัวแปรสำหรับสถิติ
@@ -3038,6 +3200,7 @@ async def main():
         print(f"🤖 Calculating AI prediction for {symbol}...")
         
         # เตรียมข้อมูล Technical
+        macro_data = fetch_macro_data()
         tech_data_full = {
             'price': data.get('price'),
             'rsi': data.get('rsi'),
@@ -3049,7 +3212,18 @@ async def main():
             'bb_upper': data.get('bb_upper'),
             'bb_lower': data.get('bb_lower'),
             'upside_pct': upside_pct,
-            'analyst_buy_pct': analyst_pct
+            'analyst_buy_pct': analyst_pct,
+            # ── ใหม่ทั้งหมด ──────────────────────────
+            'volume':          data.get('volume'),
+            'vol_ma20':        data.get('vol_ma20'),
+            'vol_ratio':       data.get('vol_ratio'),
+            'obv':             data.get('obv'),
+            'vwap':            data.get('vwap'),
+            'atr':             data.get('atr'),
+            'stoch_k':         data.get('stoch_k'),
+            'stoch_d':         data.get('stoch_d'),
+            'change_pct':      data.get('change_pct'),
+            'macro':           macro_data,          # ← ต่างกันนิดนึง (ดูด้านล่าง)
         }
         
         # ใช้ Sentiment แบบใหม่ถ้ามี
@@ -3177,12 +3351,14 @@ async def main():
             
             # ✅ เพิ่ม: แจ้งเตือน Strong Buy ที่มี High Confidence
             if recommendation == 'Strong Buy' and confidence == 'High':
+                upside_to_target = ((price_target - data.get('price')) / data.get('price')) * 100 if price_target else 0
                 await send_telegram_message(
                     f"🔥 <b>Strong Buy Alert!</b>\n\n"
                     f"📌 {symbol} ({category})\n"
                     f"💰 Price: ${data.get('price'):.2f}\n"
                     f"📊 Score: {overall_score}/100\n"
                     f"🎯 Target: ${price_target:.2f} (+{upside_to_target:.1f}%)\n"
+                    
                     f"💎 Risk: {risk_score}/100\n"
                     f"📝 {reason}"
                 )
