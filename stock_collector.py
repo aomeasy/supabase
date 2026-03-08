@@ -3177,7 +3177,7 @@ async def main():
             else:
                 print(f"📭 No valid news found for {symbol}")
                 
-        # ✅ UPDATE sentiment_score หลังได้ข้อมูลจาก Finnhub
+            # ✅ UPDATE sentiment_score หลังได้ข้อมูลจาก Finnhub
             if news_sentiment_advanced is not None and snapshot_saved:
                 try:
                     latest_snapshot = supabase.table("stock_snapshots")\
@@ -3214,7 +3214,7 @@ async def main():
             'bb_upper': data.get('bb_upper'),
             'bb_lower': data.get('bb_lower'),
             'upside_pct': upside_pct, 
-            'analyst_buy_pct': analyst_pct if analyst_pct else None,
+            'analyst_buy_pct': analyst_pct if analyst_pct and analyst_pct > 0 else None,
             # ── ใหม่ทั้งหมด ──────────────────────────
             'volume':          data.get('volume'),
             'vol_ma20':        data.get('vol_ma20'),
