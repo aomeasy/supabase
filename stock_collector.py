@@ -527,6 +527,7 @@ def fetch_analyst_data(symbol):
   
 
 def fetch_macro_data():
+    print("🔍 fetch_macro_data() called — NEW VERSION_030869") 
     """
     ดึงข้อมูล Macro: VIX, SPY, QQQ, XLK, Bond 10Y
     ไม่กระทบ logic เดิม — เรียกแยกเสมอ
