@@ -466,31 +466,65 @@ def calculate_upside_pct(current_price, ema_200, ema_50=None, analyst_target=Non
     
     return None         
 
- 
-
 def fetch_analyst_data(symbol):
-    """ดึงข้อมูล Analyst Recommendations จาก yfinance"""
     try:
         stock = yf.Ticker(symbol)
-        recommendations = stock.recommendations
         
+        # ✅ วิธีที่ 1: ใช้ get_recommendations() → ได้ตัวเลขตรงๆ
+        rec_summary = stock.get_recommendations()
+        if rec_summary is not None and not rec_summary.empty:
+            latest = rec_summary.iloc[0]  # เดือนล่าสุด (0m)
+            strong_buy = latest.get('strongBuy', 0)
+            buy        = latest.get('buy', 0)
+            hold       = latest.get('hold', 0)
+            sell       = latest.get('sell', 0)
+            strong_sell = latest.get('strongSell', 0)
+            
+            total = strong_buy + buy + hold + sell + strong_sell
+            if total > 0:
+                buy_pct = round(((strong_buy + buy) / total) * 100, 2)
+                print(f"   📊 Analyst: SB={strong_buy} B={buy} H={hold} S={sell} SS={strong_sell} → Buy%={buy_pct}")
+                return buy_pct
+        
+        # ✅ วิธีที่ 2: fallback ใช้ recommendations (upgrade/downgrade)
+        recommendations = stock.recommendations
         if recommendations is not None and not recommendations.empty:
             recent = recommendations.tail(10)
             buy_grades = ['buy', 'strong buy', 'outperform', 'overweight']
             buy_count = 0
             
             for _, row in recent.iterrows():
-                grade = str(row.get('To Grade', '')).lower()
+                if row.get('toGrade'):
+                    grade = str(row.get('toGrade')).lower().strip()
+                elif row.get('To Grade'):
+                    grade = str(row.get('To Grade')).lower().strip()
+                elif row.get('action'):
+                    grade = str(row.get('action')).lower().strip()
+                else:
+                    grade = ''
+                
                 if any(buy_word in grade for buy_word in buy_grades):
                     buy_count += 1
             
             total = len(recent)
             return round((buy_count / total) * 100, 2) if total > 0 else None
-            
+        
+        # ✅ วิธีที่ 3: fallback ใช้ recommendationMean จาก info
+        info = stock.info
+        recommend_mean = info.get('recommendationMean')
+        if recommend_mean:
+            if recommend_mean <= 1.5:   return 90.0
+            elif recommend_mean <= 2.0: return 75.0
+            elif recommend_mean <= 2.5: return 60.0
+            elif recommend_mean <= 3.0: return 40.0
+            else:                       return 20.0
+        
     except Exception as e:
         print(f"⚠️ Cannot fetch analyst data for {symbol}: {e}")
     
     return None
+ 
+  
 
 def fetch_macro_data():
     """
@@ -505,7 +539,7 @@ def fetch_macro_data():
             "xlk":   "XLK",
             "bond":  "^TNX",
         }
-        result = {} 
+        result = {}  
         for key, ticker in macro_tickers.items():
             try:
                 df = yf.download(ticker, period="5d", interval="1d", 
@@ -516,8 +550,8 @@ def fetch_macro_data():
                 # ✅ แก้ปัญหา yfinance ใหม่ที่ df["Close"] เป็น DataFrame
                 close = df["Close"]
                 if isinstance(close, pd.DataFrame):
-                    close = close.iloc[:, 0]  # เอา column แรก
-                close = close.dropna()        # ตัด NaN ออก
+                    close = close.iloc[:, 0]
+                close = close.dropna()
                 
                 if len(close) >= 2:
                     val = float(close.iloc[-1])
