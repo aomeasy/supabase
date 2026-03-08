@@ -2019,17 +2019,24 @@ async def analyze_single_stock(symbol):
                 
                 market_cap = info.get('marketCap')
              
-
-             
-
+                pe_ratio   = info.get('trailingPE')
+                eps_growth = info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None
+                peg_ratio  = info.get('pegRatio') or info.get('trailingPegRatio')
+                
+                # ✅ fallback คำนวณเองถ้าไม่มีค่า
+                if not peg_ratio and pe_ratio and eps_growth and eps_growth > 0:
+                    peg_ratio = round(pe_ratio / eps_growth, 2)
+                
                 fundamental_data = {
-                    "pe_ratio": info.get('trailingPE'),
+                    "pe_ratio": pe_ratio,
                     "pe_ratio_forward": info.get('forwardPE'),
-                    "peg_ratio": info.get('pegRatio'),
-                    "eps_growth_pct": info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None,
+                    "peg_ratio": peg_ratio,
+                    "eps_growth_pct": eps_growth,
                     "market_cap": market_cap,
                     "analyst_price_target": info.get('targetMeanPrice') or info.get('targetMedianPrice')
                 }
+         
+            
             except Exception as e:
                 print(f"⚠️ Could not fetch fundamental data: {e}")
         
@@ -3002,16 +3009,23 @@ async def main():
             
 
             
-
-
+                pe_ratio   = info.get('trailingPE')
+                eps_growth = info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None
+                peg_ratio  = info.get('pegRatio') or info.get('trailingPegRatio')
+                
+                # ✅ fallback คำนวณเองถ้าไม่มีค่า
+                if not peg_ratio and pe_ratio and eps_growth and eps_growth > 0:
+                    peg_ratio = round(pe_ratio / eps_growth, 2)
+                
                 fundamental_data = {
-                    "pe_ratio": info.get('trailingPE'),
+                    "pe_ratio": pe_ratio,
                     "pe_ratio_forward": info.get('forwardPE'),
-                    "peg_ratio": info.get('pegRatio'),
-                    "eps_growth_pct": info.get('earningsGrowth', 0) * 100 if info.get('earningsGrowth') else None,
+                    "peg_ratio": peg_ratio,
+                    "eps_growth_pct": eps_growth,
                     "market_cap": market_cap,
                     "analyst_price_target": info.get('targetMeanPrice') or info.get('targetMedianPrice')
                 }
+ 
                 
                 if market_cap:
                     market_cap_str = f"${market_cap/1e9:.1f}B" if market_cap >= 1e9 else f"${market_cap/1e6:.1f}M"
@@ -3162,7 +3176,26 @@ async def main():
                     print(f"⚠️ Failed to save news for {symbol}: {news_error}")
             else:
                 print(f"📭 No valid news found for {symbol}")
-        
+                
+        # ✅ UPDATE sentiment_score หลังได้ข้อมูลจาก Finnhub
+            if news_sentiment_advanced is not None and snapshot_saved:
+                try:
+                    latest_snapshot = supabase.table("stock_snapshots")\
+                        .select("id")\
+                        .eq("symbol", symbol)\
+                        .order("recorded_at", desc=True)\
+                        .limit(1)\
+                        .execute()
+                    
+                    if latest_snapshot.data:
+                        snap_id = latest_snapshot.data[0]['id']
+                        supabase.table("stock_snapshots")\
+                            .update({"sentiment_score": news_sentiment_advanced})\
+                            .eq("id", snap_id)\
+                            .execute()
+                        print(f"✅ Updated sentiment_score = {news_sentiment_advanced}")
+                except Exception as e:
+                    print(f"⚠️ Cannot update sentiment_score: {e}")
         # ============================================
         # STEP 5: คำนวณ AI Prediction
         # ============================================
@@ -3180,8 +3213,8 @@ async def main():
             'ema_200': data.get('ema_200'),
             'bb_upper': data.get('bb_upper'),
             'bb_lower': data.get('bb_lower'),
-            'upside_pct': upside_pct,
-            'analyst_buy_pct': analyst_pct,
+            'upside_pct': upside_pct, 
+            'analyst_buy_pct': analyst_pct if analyst_pct else None,
             # ── ใหม่ทั้งหมด ──────────────────────────
             'volume':          data.get('volume'),
             'vol_ma20':        data.get('vol_ma20'),
@@ -3269,7 +3302,8 @@ async def main():
         
         # 🆕 เพิ่มฟิลด์ใหม่ (ตอนนี้ใช้ได้แล้ว!)
         if risk_score > 0:
-            prediction_payload["risk_score"] = risk_score
+             
+            prediction_payload["risk_score"] = risk_score if risk_score is not None else 0
         
         if confidence:
             prediction_payload["confidence"] = confidence
