@@ -506,20 +506,31 @@ def fetch_macro_data():
             "bond":  "^TNX",
         }
         result = {}
+
+
         for key, ticker in macro_tickers.items():
             try:
-                df = yf.download(ticker, period="3d", interval="1d", progress=False, auto_adjust=True)
+                df = yf.download(ticker, period="5d", interval="1d", progress=False, auto_adjust=True)
+                
+                print(f"   {ticker}: rows={len(df)}")
+                
                 if len(df) >= 2:
                     chg = float((df["Close"].iloc[-1] / df["Close"].iloc[-2] - 1) * 100)
                     val = float(df["Close"].iloc[-1])
                     result[key]          = round(val, 2)
                     result[f"{key}_chg"] = round(chg, 2)
+                elif len(df) == 1:
+                    val = float(df["Close"].iloc[-1])
+                    result[key]          = round(val, 2)
+                    result[f"{key}_chg"] = None
                 else:
                     result[key]          = None
                     result[f"{key}_chg"] = None
-            except:
+            except Exception as e:
+                print(f"   ⚠️ {ticker} failed: {e}")
                 result[key]          = None
                 result[f"{key}_chg"] = None
+         
 
         # สรุป Market Sentiment
         spy_chg = result.get("spy_chg") or 0
@@ -3120,7 +3131,7 @@ async def main():
         print(f"🤖 Calculating AI prediction for {symbol}...")
         
         # เตรียมข้อมูล Technical
-        macro_data = fetch_macro_data()
+        # macro_data = fetch_macro_data()
         tech_data_full = {
             'price': data.get('price'),
             'rsi': data.get('rsi'),
