@@ -505,23 +505,27 @@ def fetch_macro_data():
             "xlk":   "XLK",
             "bond":  "^TNX",
         }
-        result = {}
-
-
+        result = {} 
         for key, ticker in macro_tickers.items():
             try:
-                df = yf.download(ticker, period="5d", interval="1d", progress=False, auto_adjust=True)
+                df = yf.download(ticker, period="5d", interval="1d", 
+                                 progress=False, auto_adjust=True)
                 
                 print(f"   {ticker}: rows={len(df)}")
                 
-                if len(df) >= 2:
-                    chg = float((df["Close"].iloc[-1] / df["Close"].iloc[-2] - 1) * 100)
-                    val = float(df["Close"].iloc[-1])
+                # ✅ แก้ปัญหา yfinance ใหม่ที่ df["Close"] เป็น DataFrame
+                close = df["Close"]
+                if isinstance(close, pd.DataFrame):
+                    close = close.iloc[:, 0]  # เอา column แรก
+                close = close.dropna()        # ตัด NaN ออก
+                
+                if len(close) >= 2:
+                    val = float(close.iloc[-1])
+                    chg = float((close.iloc[-1] / close.iloc[-2] - 1) * 100)
                     result[key]          = round(val, 2)
                     result[f"{key}_chg"] = round(chg, 2)
-                elif len(df) == 1:
-                    val = float(df["Close"].iloc[-1])
-                    result[key]          = round(val, 2)
+                elif len(close) == 1:
+                    result[key]          = round(float(close.iloc[-1]), 2)
                     result[f"{key}_chg"] = None
                 else:
                     result[key]          = None
@@ -530,8 +534,7 @@ def fetch_macro_data():
                 print(f"   ⚠️ {ticker} failed: {e}")
                 result[key]          = None
                 result[f"{key}_chg"] = None
-         
-
+                
         # สรุป Market Sentiment
         spy_chg = result.get("spy_chg") or 0
         qqq_chg = result.get("qqq_chg") or 0
