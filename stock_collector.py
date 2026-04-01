@@ -524,7 +524,41 @@ def fetch_analyst_data(symbol):
     
     return None
  
-  
+def fetch_usdthb():
+    """ดึง USD/THB rate จาก yfinance และบันทึก Supabase"""
+    try:
+        df = yf.download("THB=X", period="5d", interval="1d",
+                         progress=False, auto_adjust=True)
+        
+        close = df["Close"]
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        close = close.dropna()
+        
+        if len(close) < 1:
+            print("⚠️ USD/THB: no data")
+            return None
+        
+        rate = float(close.iloc[-1])
+        change_pct = float((close.iloc[-1] / close.iloc[-2] - 1) * 100) if len(close) >= 2 else None
+        
+        # บันทึก Supabase
+        try:
+            supabase.table("fx_snapshots").insert({
+                "pair": "USDTHB",
+                "rate": round(rate, 4),
+                "change_pct": round(change_pct, 4) if change_pct else None,
+                "recorded_at": datetime.now().isoformat()
+            }).execute()
+            print(f"💱 USD/THB: ฿{rate:.4f} ({change_pct:+.2f}%)")
+        except Exception as db_err:
+            print(f"⚠️ fx_snapshots insert failed: {db_err}")
+        
+        return {"rate": round(rate, 4), "change_pct": round(change_pct, 4) if change_pct else None}
+    
+    except Exception as e:
+        print(f"⚠️ fetch_usdthb failed: {e}")
+        return None  
 
 def fetch_macro_data():
     print("🔍 fetch_macro_data() called — NEW VERSION_030869") 
@@ -589,7 +623,14 @@ def fetch_macro_data():
         elif vix_val > 15: result["vix_signal"] = "Caution"
         else:              result["vix_signal"] = "Calm"
 
+        # === เพิ่ม USD/THB ===
+        usdthb = fetch_usdthb()
+        result["usdthb"]     = usdthb.get("rate")     if usdthb else None
+        result["usdthb_chg"] = usdthb.get("change_pct") if usdthb else None
+        # =====================
+        
         print(f"📊 Macro: VIX={result.get('vix')} ({result.get('vix_signal')}) | SPY={spy_chg:+.2f}% | QQQ={qqq_chg:+.2f}% | Sentiment={result.get('market_sentiment')}")
+
         return result
 
     except Exception as e:
@@ -1897,10 +1938,21 @@ def format_alert_by_session(opportunities, market_data, session_type, session_na
         
         message += "\n"
     
-    # ภาพรวมตลาด
+    # ภาพรวมตลาด 
+
+
     message += "📊 <b>ตลาด:</b> "
     message += f"S&P {market_data['SPY']:+.1f}% | "
-    message += f"NASDAQ {market_data['QQQ']:+.1f}%\n\n"
+    message += f"NASDAQ {market_data['QQQ']:+.1f}%\n"
+    # === เพิ่ม USD/THB ===
+    usdthb_rate = market_data.get('usdthb')
+    usdthb_chg  = market_data.get('usdthb_chg')
+    if usdthb_rate:
+        chg_str = f" ({usdthb_chg:+.2f}%)" if usdthb_chg else ""
+        trend   = "🔴 บาทอ่อน" if usdthb_chg and usdthb_chg > 0 else "🟢 บาทแข็ง" if usdthb_chg and usdthb_chg < 0 else ""
+        message += f"💱 USD/THB: ฿{usdthb_rate:.2f}{chg_str} {trend}\n"
+    # =====================
+    message += "\n"
     
     # คำแนะนำตามช่วงเวลา
     avg_change = (market_data['SPY'] + market_data['QQQ']) / 2
@@ -1945,7 +1997,15 @@ async def send_market_alert_after_collection():
     print(f"🔍 Found {len(opportunities)} opportunities")
     
     # 3. ดึงข้อมูลตลาด
+
+
     market_data = get_market_indices_simple()
+    # === merge macro (usdthb) เข้า market_data ===
+    live_macro = fetch_macro_data()
+    market_data["usdthb"]     = live_macro.get("usdthb")
+    market_data["usdthb_chg"] = live_macro.get("usdthb_chg")
+    # =============================================
+     
     print(f"📊 Market: SPY {market_data['SPY']:+.1f}% | QQQ {market_data['QQQ']:+.1f}%")
     
     # 4. สร้างข้อความ (ส่งเสมอ แม้ไม่มีโอกาส)
