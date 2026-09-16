@@ -20,7 +20,7 @@ TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_KEY")
 FINNHUB_KEY = os.getenv("FINNHUB_KEY") 
 # Investor Level Configuration 
 
-TELEGRAM_BOT_TOKEN = "8473805508:AAE7FqIeUl_H0vdMuIzfHMld_rIfBSUPpbw"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # ต้องตั้งค่า Chat ID ใน environment
 
 # Debug
