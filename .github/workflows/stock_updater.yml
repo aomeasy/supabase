@@ -52,3 +52,12 @@ jobs:
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python stock_collector.py # เปลี่ยนชื่อไฟล์ให้ตรงกับไฟล์ Python ของคุณ
+        
+      - name: Keep repo active (prevent 60-day auto-disable)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "Last run: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" > .github/last_run.txt
+          git add .github/last_run.txt
+          git commit -m "chore: keep workflow active [skip ci]" || echo "Nothing to commit"
+          git push
